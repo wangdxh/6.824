@@ -19,3 +19,5 @@
 
 # Go workspace file
 go.work
+src/.DS_Store
+.DS_Store
