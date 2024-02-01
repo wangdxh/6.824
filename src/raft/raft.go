@@ -339,6 +339,12 @@ func (rf *Raft) dealElectionTimeout() {
 			reply := RequestVoteReply{}
 			start := time.Now()
 			ret := rf.sendRequestVote(inx, &req, &reply)
+			end := time.Now()
+			if end.UnixMilli()-start.UnixMilli() > 600 {
+				rf.MyPrintf(DEBUGLOGREPLICATION, "i am obsolete send request to %d vote spend %d ms ret %v reply granted %v replyterm %d when i am %d",
+					inx, end.UnixMilli()-start.UnixMilli(), ret, reply.VoteGranted, reply.Term, req.Term)
+			}
+
 			if ret {
 				select {
 				case <-stopchn:
@@ -351,7 +357,7 @@ func (rf *Raft) dealElectionTimeout() {
 						rf.MyPrintf(DEBUGLOGREPLICATION, "send request to %d vote spend %d ms ret %v reply granted %v replyterm %d",
 							inx, end.UnixMilli()-start.UnixMilli(), ret, reply.VoteGranted, reply.Term)
 
-						if end.UnixMilli()-start.UnixMilli() > 300 {
+						if end.UnixMilli()-start.UnixMilli() > 600 {
 							panic(" dealElectionTimeout can not happen")
 						}
 						return
@@ -368,7 +374,9 @@ func (rf *Raft) dealElectionTimeout() {
 		rf.extendElectionTimeout()
 	}()
 
-	deadline := time.Now().Add(200 * time.Millisecond).UnixMilli()
+	// 2 term 78 2024-02-01 19:02:13.622 -- send request to 4 vote spend 5737 ms ret false reply granted false replyterm 0 when i am 70
+	// 为什么这个值放这么大呢，看看实际项目中的 5秒钟时间
+	deadline := time.Now().Add(500 * time.Millisecond).UnixMilli()
 
 	oknums := 1
 	for {
@@ -777,7 +785,7 @@ func (rf *Raft) ticker() {
 实际2C测试中，数据的时长，达到了300ms的间隔,所以我们要再放大一些
 */
 func (rf *Raft) extendElectionTimeout() {
-	x := rand.Intn(200) + 400
+	x := rand.Intn(400) + 400
 	rf.MyPrintf(DEBUGELECTION, "%d term %d election timeout add %d \n", rf.me, rf.MyTerm, x)
 	rf.electionTimeout = time.Now().Add(time.Millisecond * time.Duration(x))
 }
