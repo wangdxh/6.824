@@ -138,6 +138,14 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	return rf.MyTerm, rf.role == RoleLeader
 }
+func (rf *Raft) Print() {
+	fmt.Printf(" %d term %d isleader %v commitedindex: %d  applyiedindex: %d logslen: %d ",
+		rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, len(rf.Logs))
+	if len(rf.Logs) > 0 {
+		fmt.Printf(" first: %v end: %v all %v ", rf.Logs[0], rf.Logs[len(rf.Logs)-1], rf.Logs)
+	}
+	fmt.Printf("\n")
+}
 
 // return logs len, index, term
 func (rf *Raft) lastLog() (int, int, int) {
@@ -174,7 +182,10 @@ func (rf *Raft) persist() {
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 	end := time.Now()
-	rf.MyPrintf(DEBUGLOGREPLICATION, "persist use %d ms", end.UnixMilli()-start.UnixMilli())
+	timelen := end.UnixMilli() - start.UnixMilli()
+	if timelen > 5 {
+		rf.MyPrintf(DEBUGLOGREPLICATION, "------------------------------------------persist use %d ms", timelen)
+	}
 }
 
 // restore previously persisted state.
@@ -303,14 +314,14 @@ func (rf *Raft) dealElectionTimeout() {
 		rf.MyTerm += 1
 		rf.role = RoleCandidate
 		rf.VotedFor = rf.me
-		rf.extendElectionTimeout()
 	}
 	rf.persist()
+	rf.extendElectionTimeout()
 	rf.mu.Unlock()
 
 	rf.MyPrintf(DEBUGLOGREPLICATION, "start election %d  %d", rf.electionTimeout.UnixMilli(), time.Now().UnixMilli())
-
-	retchn := make(chan RequestVoteReply, 3)
+	// 不能创建带缓冲的，否则 在reply 返回之后select的时候，即使stop已经关闭了，依然会写成功，导致打印输出
+	retchn := make(chan RequestVoteReply)
 	stopchn := make(chan int)
 
 	for inx, _ := range rf.peers {
@@ -331,12 +342,19 @@ func (rf *Raft) dealElectionTimeout() {
 			if ret {
 				select {
 				case <-stopchn:
-					return
+					{
+						return
+					}
 				case retchn <- reply:
 					{
 						end := time.Now()
 						rf.MyPrintf(DEBUGLOGREPLICATION, "send request to %d vote spend %d ms ret %v reply granted %v replyterm %d",
 							inx, end.UnixMilli()-start.UnixMilli(), ret, reply.VoteGranted, reply.Term)
+
+						if end.UnixMilli()-start.UnixMilli() > 300 {
+							panic(" dealElectionTimeout can not happen")
+						}
+						return
 					}
 				}
 			}
@@ -345,8 +363,19 @@ func (rf *Raft) dealElectionTimeout() {
 	}
 
 	//oknums := 0 sb了
+	defer func() {
+		close(stopchn)
+		rf.extendElectionTimeout()
+	}()
+
+	deadline := time.Now().Add(200 * time.Millisecond).UnixMilli()
+
 	oknums := 1
 	for {
+		millilen := deadline - time.Now().UnixMilli()
+		if millilen < 0 {
+			return
+		}
 		select {
 		case reply := <-retchn:
 			{
@@ -356,22 +385,21 @@ func (rf *Raft) dealElectionTimeout() {
 						rf.role = RoleLeader
 						rf.MyPrintf(DEBUGLOGREPLICATION, " become leader %d term %d\n", rf.me, rf.MyTerm)
 						rf.initNowIAmLeader()
-						// send first nil operate
-						goto out
+						return
 					}
 				} else if reply.Term > rf.MyTerm {
 					rf.role = RoleFollower
 					rf.MyTerm = reply.Term
-					rf.extendElectionTimeout()
-					goto out
+					return
 				}
 			}
-		case <-time.After(10 * time.Millisecond):
-			goto out
+		case <-time.After(time.Duration(millilen) * time.Millisecond):
+			{
+				return
+			}
 		}
 	}
-out:
-	close(stopchn)
+
 }
 
 func (rf *Raft) initNowIAmLeader() {
@@ -420,7 +448,6 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	if args.Term < rf.MyTerm {
 		return
 	}
-	rf.extendElectionTimeout()
 	rf.MyPrintf(DEBUGLOGREPLICATION, "getappendentry from %d term %d previndex %d prevterm %d leadercommit %d entryies %d ",
 		args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit, len(args.Entries))
 
@@ -488,6 +515,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	}
 	rf.updateReplicaCommitIndex(args)
 	rf.updateAppliedIndex()
+	rf.extendElectionTimeout()
 }
 func (rf *Raft) updateReplicaCommitIndex(args *AppendEntries) {
 	// 5. If leaderCommit > commitIndex, set commitIndex =
@@ -496,7 +524,6 @@ func (rf *Raft) updateReplicaCommitIndex(args *AppendEntries) {
 	// 这个条件的保证，就是收到了一条新leader 新term上写的数据
 	_, lastlogindex, lastlogterm := rf.lastLog()
 	if lastlogterm == args.Term && rf.CommitIndex < args.LeaderCommit {
-
 		if args.LeaderCommit > lastlogindex {
 			rf.CommitIndex = lastlogindex
 		} else {
@@ -546,14 +573,14 @@ func (rf *Raft) dealHeartBeatTimeout() {
 			if inx == rf.me {
 				continue
 			}
-			_, lastloginx, lastlogterm := rf.lastLog()
+			//_, lastloginx, lastlogterm := rf.lastLog()
 			go func(inx int) {
 				args := AppendEntries{
 					Term:         rf.MyTerm,
 					LeaderId:     rf.me,
 					LeaderCommit: rf.CommitIndex,
-					PrevLogIndex: lastloginx, // 这里用于 TestRejoin2B
-					PrevLogTerm:  lastlogterm,
+					//PrevLogIndex: lastloginx,
+					//PrevLogTerm:  lastlogterm,
 				}
 				reply := AppendEntriesReply{}
 				ret := rf.sendAppendEntries(inx, &args, &reply)
@@ -631,7 +658,8 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 					if val.Index == entries.PrevLogIndex {
 						entries.PrevLogTerm = val.Term
 					}
-					if val.Index >= rf.nextIndex[topeer] && len(entries.Entries) < 10 {
+					MaxEntriesOneAppend := 100
+					if val.Index >= rf.nextIndex[topeer] && len(entries.Entries) < MaxEntriesOneAppend {
 						entries.Entries = append(entries.Entries, val)
 					}
 				}
@@ -740,8 +768,16 @@ func (rf *Raft) ticker() {
 	}
 }
 
+/*
+3 term 152 2024-02-01 17:22:44.476 -- getappendentry from 4 term 152 previndex 0 prevterm 0 leadercommit 5 entryies 0
+3 term 152 2024-02-01 17:22:44.481 -- getappendentry from 4 term 152 previndex 30 prevterm 98 leadercommit 5 entryies 10
+3 term 152 2024-02-01 17:22:44.481 -- replica logs: 40 {1 1 285} {40 98 2555}
+
+3 term 153 2024-02-01 17:22:44.777 -- start election 1706779365028  1706779364777
+实际2C测试中，数据的时长，达到了300ms的间隔,所以我们要再放大一些
+*/
 func (rf *Raft) extendElectionTimeout() {
-	x := rand.Intn(100) + 200
+	x := rand.Intn(200) + 400
 	rf.MyPrintf(DEBUGELECTION, "%d term %d election timeout add %d \n", rf.me, rf.MyTerm, x)
 	rf.electionTimeout = time.Now().Add(time.Millisecond * time.Duration(x))
 }

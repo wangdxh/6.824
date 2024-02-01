@@ -933,13 +933,13 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
 
 	cfg.one(rand.Int()%10000, 1, true)
-	fmt.Printf("***************************************************************************************************TestFigure8Unreliable2C 1\n")
+	fmt.Printf("***************************************************************************************************Figure8Unreliable2C 1\n")
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
 			cfg.setlongreordering(true)
-			fmt.Printf("***************************************************************************************************TestFigure8Unreliable2C  delay true\n")
+			fmt.Printf("***************************************************************************************************Figure8Unreliable2C  delay true\n")
 		}
 		leader := -1
 		for i := 0; i < servers; i++ {
@@ -952,9 +952,11 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
+			fmt.Printf("*************************************************************************************************** sleep %d ms\n", ms)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		} else {
 			ms := (rand.Int63() % 13)
+			fmt.Printf("*************************************************************************************************** sleep %d ms\n", ms)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
@@ -979,8 +981,13 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			cfg.connect(i)
 		}
 	}
-	fmt.Printf("*************************************************************************************************** write last one  \n")
-	cfg.one(rand.Int()%10000, servers, true)
+
+	for i := 0; i < servers; i++ {
+		cfg.rafts[i].Print()
+	}
+	x := rand.Int() % 10000
+	fmt.Printf("*************************************************************************************************** write last one  %d \n", x)
+	cfg.one(x, servers, true)
 
 	cfg.end()
 }
@@ -1264,4 +1271,51 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 		}
 	}
 	cfg.end()
+}
+
+func TestSnapshotAllCrashMy(t *testing.T) {
+	//retchn := make(chan int, 4)
+	retchn := make(chan int)
+	stopchn := make(chan int)
+	for x := 0; x < 4; x++ {
+		go func(stopchn chan int, retch chan int, x int) {
+			if x == 0 {
+				time.Sleep(2 * time.Millisecond)
+			} else {
+				time.Sleep(1 * time.Second)
+			}
+			select {
+			case <-stopchn:
+				{
+					fmt.Printf(" get stop chn from routine %d \n", x)
+					return
+				}
+			case retchn <- x:
+				{
+					fmt.Printf("write to retchn  from routine %d \n", x)
+					return
+				}
+			}
+		}(stopchn, retchn, x)
+	}
+
+	for {
+		select {
+		case r := <-retchn:
+			{
+				fmt.Printf(" get r from retch %d \n", r)
+			}
+		case <-time.After(20 * time.Millisecond):
+			{
+				fmt.Printf(" time after 20\n")
+				goto here
+			}
+		}
+	}
+here:
+
+	close(stopchn)
+	fmt.Printf("close stopchan\n")
+	time.Sleep(5 * time.Second)
+
 }
