@@ -49,7 +49,9 @@ package labrpc
 //   pass svc to srv.AddService()
 //
 
-import "6.824/labgob"
+import (
+	"6.824/labgob"
+)
 import "bytes"
 import "reflect"
 import "sync"
@@ -325,7 +327,7 @@ func (rn *Network) MakeEnd(endname interface{}) *ClientEnd {
 	rn.ends[endname] = e
 	rn.enabled[endname] = false
 	rn.connections[endname] = nil
-
+	//fmt.Printf("make end name %v\n", endname)
 	return e
 }
 
@@ -334,6 +336,7 @@ func (rn *Network) AddServer(servername interface{}, rs *Server) {
 	defer rn.mu.Unlock()
 
 	rn.servers[servername] = rs
+	//fmt.Printf(" AddServer name : %v \n", servername)
 }
 
 func (rn *Network) DeleteServer(servername interface{}) {
@@ -350,6 +353,7 @@ func (rn *Network) Connect(endname interface{}, servername interface{}) {
 	defer rn.mu.Unlock()
 
 	rn.connections[endname] = servername
+	//fmt.Printf(" connect client %v  to server %v \n", endname, servername)
 }
 
 // enable/disable a ClientEnd.
@@ -379,11 +383,9 @@ func (rn *Network) GetTotalBytes() int64 {
 	return x
 }
 
-//
 // a server is a collection of services, all sharing
 // the same rpc dispatcher. so that e.g. both a Raft
 // and a k/v server can listen to the same rpc endpoint.
-//
 type Server struct {
 	mu       sync.Mutex
 	services map[string]*Service
@@ -444,20 +446,34 @@ type Service struct {
 	methods map[string]reflect.Method
 }
 
+/*
+		svc.name Raft type *raft.Raft value &{{0 0} [0xc00015ada0 0xc00015adc0 0xc00015ade0 0xc00015ae00 0xc00015ae20 0xc00015ae40 0xc00015ae60] 0xc0001a6b80 6 0}
+	        CondInstallSnapshot pp  ni  4 no 1
+	        bad method: CondInstallSnapshot
+	        GetState pp  ni  1 no 2
+	        bad method: GetState
+	        Kill pp  ni  1 no 0
+	        bad method: Kill
+	        RequestVote pp  ni  3 no 0
+	        Snapshot pp  ni  3 no 0
+
+*
+*/
 func MakeService(rcvr interface{}) *Service {
 	svc := &Service{}
 	svc.typ = reflect.TypeOf(rcvr)
 	svc.rcvr = reflect.ValueOf(rcvr)
 	svc.name = reflect.Indirect(svc.rcvr).Type().Name()
 	svc.methods = map[string]reflect.Method{}
+	//fmt.Printf(" svc.name %v type %v value %v\n", svc.name, svc.typ, svc.rcvr)
 
 	for m := 0; m < svc.typ.NumMethod(); m++ {
 		method := svc.typ.Method(m)
 		mtype := method.Type
 		mname := method.Name
 
-		//fmt.Printf("%v pp %v ni %v 1k %v 2k %v no %v\n",
-		//	mname, method.PkgPath, mtype.NumIn(), mtype.In(1).Kind(), mtype.In(2).Kind(), mtype.NumOut())
+		/*fmt.Printf("\t%v pp %v ni  %v no %v\n",
+		mname, method.PkgPath, mtype.NumIn(), mtype.NumOut())*/
 
 		if method.PkgPath != "" || // capitalized?
 			mtype.NumIn() != 3 ||
@@ -465,7 +481,7 @@ func MakeService(rcvr interface{}) *Service {
 			mtype.In(2).Kind() != reflect.Ptr ||
 			mtype.NumOut() != 0 {
 			// the method is not suitable for a handler
-			//fmt.Printf("bad method: %v\n", mname)
+			//fmt.Printf("\tbad method: %v\n", mname)
 		} else {
 			// the method looks like a handler
 			svc.methods[mname] = method
