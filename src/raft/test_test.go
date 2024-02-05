@@ -1159,6 +1159,8 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
+		start := time.Now()
+
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
@@ -1167,16 +1169,19 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		}
 
 		if disconnect {
+			fmt.Printf("\n************************** disscent %d \n", victim)
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 		if crash {
+			fmt.Printf("\n************************** crash %d \n", victim)
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
+		fmt.Printf("\n************************** write sender %d  -- %d items \n", sender, nn)
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
@@ -1198,15 +1203,18 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.
 			cfg.connect(victim)
+			fmt.Printf("\n************************** restore connect %d \n", victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
 			cfg.connect(victim)
+			fmt.Printf("\n************************** restore crash %d \n", victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+		fmt.Printf("\n*************************************************************** snapcommon iters %d time: %d ms\n", i, time.Now().UnixMilli()-start.UnixMilli())
 	}
 	cfg.end()
 }
@@ -1273,8 +1281,31 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 	cfg.end()
 }
 
-func TestSnapshotAllCrashMy(t *testing.T) {
+func TestMyroutine(t *testing.T) {
 	//retchn := make(chan int, 4)
+	testretchn := make(chan int)
+	close(testretchn)
+	testretchn <- 1
+	select {
+	case ok, val := <-testretchn:
+		{
+			fmt.Printf("%v %v", ok, val)
+		}
+	}
+	return
+
+	//
+	var slicea []int
+	slicea = append(slicea, 1)
+	slicea = append(slicea, 2)
+	slicea = append(slicea, 3)
+
+	slicea = slicea[:0]
+	slicea = append(slicea, 1)
+	slicea = append(slicea, 2)
+	slicea = append(slicea, 3)
+	//slicea = slicea[4:]
+
 	retchn := make(chan int)
 	stopchn := make(chan int)
 	for x := 0; x < 4; x++ {
