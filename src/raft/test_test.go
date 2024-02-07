@@ -1283,6 +1283,8 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 
 func TestMyroutine(t *testing.T) {
 	//retchn := make(chan int, 4)
+	var slicetest []byte
+	fmt.Printf(" len %d  %v\n", len(slicetest), slicetest)
 	testretchn := make(chan int)
 	close(testretchn)
 	testretchn <- 1

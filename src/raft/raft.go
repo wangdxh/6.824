@@ -107,6 +107,8 @@ type Raft struct {
 	electionTimeout time.Time
 	leaderTimeout   time.Time
 
+	persistindex int
+
 	persistmu sync.Mutex
 }
 
@@ -142,14 +144,26 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// snapshot + crash 这里的bug 就显现出来了，
 	// 跟踪Make函数的调用，发现每次 Make之后，tester的Applyid 相关信息被置为了0，所以这里我们也得置为0，然后重放一下，
 	// 这里一直没有搞懂 tester的流程，花费了不少时间
-	rf.CommitIndex = 0
-	rf.LastAppliedIndex = 0
+
+	/*rf.CommitIndex = 0
+	rf.LastAppliedIndex = 0*/
 
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.VotedFor = -1
 	rf.role = RoleFollower
 	rf.applyChn = applyCh
+
+	retchn := make(chan int)
+	go func() {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		retchn <- 1
+		rf.LastAppliedIndex = 0
+		rf.updateAppliedIndex()
+	}()
+	<-retchn
+	close(retchn)
 
 	rf.MyPrintf(DEBUGLOGREPLICATION, " *************** i am created now %d ", rf.me)
 	rf.Print()
@@ -503,9 +517,43 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, timeout int64) bool {
+	//ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	//return ok
+	retchn := make(chan bool)
+	stopchn := make(chan int)
+	defer func() {
+		close(stopchn)
+	}()
+
+	go func() {
+		start := time.Now()
+		ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+		timems := time.Now().UnixMilli() - start.UnixMilli()
+		rf.MyPrintf(DEBUGLOGREPLICATION, "send to peer %d RequestVote rpc return %v speed %d ms isobselete %v granted %v replyterm %d when i am %d",
+			server, ok, timems, timems > timeout, reply.VoteGranted, reply.Term, args.Term)
+		select {
+		case <-stopchn:
+			{
+				return
+			}
+		case retchn <- ok:
+			{
+				return
+			}
+		}
+	}()
+
+	select {
+	case ok := <-retchn:
+		{
+			return ok
+		}
+	case <-time.After(time.Duration(timeout) * time.Millisecond):
+		{
+			return false
+		}
+	}
 }
 
 /*
@@ -533,15 +581,18 @@ func (rf *Raft) dealElectionTimeout() {
 
 	rf.MyPrintf(DEBUGLOGREPLICATION, "start election %d  %d", rf.electionTimeout.UnixMilli(), time.Now().UnixMilli())
 	// 不能创建带缓冲的，否则 在reply 返回之后select的时候，即使stop已经关闭了，依然会写成功，导致打印输出
-	retchn := make(chan RequestVoteReply)
-	stopchn := make(chan int)
+	type RetValue struct {
+		ok    bool
+		reply RequestVoteReply
+	}
+	retchn := make(chan RetValue)
 
 	for inx, _ := range rf.peers {
 		if inx == rf.me {
 			continue
 		}
 		// 如果网络不通，rpc 返回不及时，这个定时器会造成，协程发送过多
-		go func(inx int, retchn chan RequestVoteReply, stopchn chan int) {
+		go func(inx int) {
 			req := RequestVoteArgs{
 				Term:         rf.MyTerm,
 				CandidateId:  rf.me,
@@ -549,81 +600,56 @@ func (rf *Raft) dealElectionTimeout() {
 				LastLogTerm:  lastlogterm,
 			}
 			reply := RequestVoteReply{}
-			start := time.Now()
-			ret := rf.sendRequestVote(inx, &req, &reply)
-			end := time.Now()
-			if end.UnixMilli()-start.UnixMilli() > 600 {
-				rf.MyPrintf(DEBUGLOGREPLICATION, "i am obsolete send request to %d vote spend %d ms ret %v reply granted %v replyterm %d when i am %d",
-					inx, end.UnixMilli()-start.UnixMilli(), ret, reply.VoteGranted, reply.Term, req.Term)
+			ret := rf.sendRequestVote(inx, &req, &reply, 300)
+			retchn <- RetValue{
+				ok:    ret,
+				reply: reply,
 			}
-
-			if ret {
-				select {
-				case <-stopchn:
-					{
-						return
-					}
-				case retchn <- reply:
-					{
-						end := time.Now()
-						rf.MyPrintf(DEBUGLOGREPLICATION, "send request to %d vote spend %d ms ret %v reply granted %v replyterm %d",
-							inx, end.UnixMilli()-start.UnixMilli(), ret, reply.VoteGranted, reply.Term)
-
-						if end.UnixMilli()-start.UnixMilli() > 600 {
-							panic(" dealElectionTimeout can not happen")
-						}
-						return
-					}
-				}
-			}
-
-		}(inx, retchn, stopchn)
+		}(inx)
 	}
+	// 2 term 78 2024-02-01 19:02:13.622 -- send request to 4 vote spend 5737 ms ret false reply granted false replyterm 0 when i am 70
+	// 为什么这个值放这么大呢，看看实际项目中的 5秒钟时间
 
-	//oknums := 0 sb了
 	defer func() {
-		close(stopchn)
 		rf.extendElectionTimeout()
 	}()
 
-	// 2 term 78 2024-02-01 19:02:13.622 -- send request to 4 vote spend 5737 ms ret false reply granted false replyterm 0 when i am 70
-	// 为什么这个值放这么大呢，看看实际项目中的 5秒钟时间
-	deadline := time.Now().Add(500 * time.Millisecond).UnixMilli()
-
 	oknums := 1
-	for {
-		millilen := deadline - time.Now().UnixMilli()
-		if millilen < 0 {
+	for x := 1; x < len(rf.peers); x++ {
+		ret := <-retchn
+		if ret.ok == false {
+			continue
+		}
+		// 这里可能会有一些异常发生，在异步发送了投票请求之后，马上收到了 更高term的请求，使得自己的term更加了 同时变成 rolefellower 了
+		// 所以这里判断一下，如果有变化，直接退出选举 防不胜防啊
+		// 3 term 77 2024-02-05 20:18:18.249 -- send request to 0 vote spend 261 ms ret true reply granted true replyterm 76
+		if rf.role != RoleCandidate && ret.reply.Term != rf.MyTerm {
+			rf.MyPrintf(DEBUGLOGREPLICATION, "get bad term or role, i will exit election")
 			return
 		}
-		select {
-		case reply := <-retchn:
-			{
-				if reply.VoteGranted {
-					oknums++
-					if oknums >= len(rf.peers)/2+1 {
-						rf.role = RoleLeader
-						rf.MyPrintf(DEBUGLOGREPLICATION, " become leader %d term %d\n", rf.me, rf.MyTerm)
-						rf.initNowIAmLeader()
-						return
-					}
-				} else if reply.Term > rf.MyTerm {
-					rf.getBiggerTerm(reply.Term)
-					return
-				}
-			}
-		case <-time.After(time.Duration(millilen) * time.Millisecond):
-			{
+		if ret.reply.VoteGranted {
+			oknums++
+			if oknums >= len(rf.peers)/2+1 {
+				rf.mu.Lock()
+				rf.role = RoleLeader
+				rf.MyPrintf(DEBUGLOGREPLICATION, " become leader %d term %d\n", rf.me, rf.MyTerm)
+				rf.initNowIAmLeader()
+				rf.mu.Unlock()
 				return
 			}
+		} else if ret.reply.Term > rf.MyTerm {
+			rf.mu.Lock()
+			rf.getBiggerTerm(ret.reply.Term)
+			rf.mu.Unlock()
+			return
 		}
 	}
-
 }
 
 func (rf *Raft) initNowIAmLeader() {
 	rf.MyPrintf(DEBUGLOGREPLICATION, " initNowIAmLeader")
 	rf.leaderTimeout = time.UnixMilli(0)
+	rf.persistindex = 0
 	logindex, _ := rf.lastEntryLogandSnapshot()
 	for inx, _ := range rf.peers {
 		if inx == rf.me {
@@ -667,6 +693,13 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	if args.Term < rf.MyTerm {
 		return
 	}
+
+	if rf.role == RoleLeader && rf.MyTerm == args.Term {
+		rf.Print()
+		rf.MyPrintf(DEBUGLOGREPLICATION, "peer info %v", args)
+		panic(" big problome, election error , now have  two leader !!!!!!!!!!!!!!!!!")
+	}
+
 	rf.MyPrintf(DEBUGLOGREPLICATION, "getappendentry from %d term %d previndex %d prevterm %d leadercommit %d entryies %d ",
 		args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit, len(args.Entries))
 
@@ -836,8 +869,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntries, reply *Append
 		start := time.Now()
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		timems := time.Now().UnixMilli() - start.UnixMilli()
-		rf.MyPrintf(DEBUGLOGREPLICATION, "send to peer %d entries rpc return %v speed %d ms isobselete %v",
-			server, ok, timems, timems > timeout)
+		rf.MyPrintf(DEBUGLOGREPLICATION, "send to peer %d entries rpc return %v speed %d ms isobselete %v entries %d ",
+			server, ok, timems, timems > timeout, len(args.Entries))
 		select {
 		case <-stopchn:
 			{
@@ -870,6 +903,7 @@ func (rf *Raft) dealHeartBeatTimeout() {
 			}
 			//lastloginx, lastlogterm := rf.lastEntryLogandSnapshot()
 			go func(inx int) {
+				rf.mu.Lock()
 				args := AppendEntries{
 					Term:         rf.MyTerm,
 					LeaderId:     rf.me,
@@ -877,11 +911,18 @@ func (rf *Raft) dealHeartBeatTimeout() {
 					//PrevLogIndex: lastloginx,
 					//PrevLogTerm:  lastlogterm,
 				}
+				if rf.role != RoleLeader {
+					rf.mu.Unlock()
+					return
+				}
+				rf.mu.Unlock()
+
 				reply := AppendEntriesReply{}
 				ret := rf.sendAppendEntries(inx, &args, &reply, 100)
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
 				if ret && reply.Term > rf.MyTerm {
 					rf.getBiggerTerm(reply.Term)
-					return
 				}
 			}(inx)
 		}
@@ -923,7 +964,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.nextIndex[rf.me] = index + 1
 	rf.MyPrintf(DEBUGLOGREPLICATION, "        logs: %v %v %v", len(rf.Logs), rf.Logs[0], rf.Logs[len(rf.Logs)-1])
 
-	rf.persist()
+	//rf.persist()
 	// 这里肯定不能串行化啊，耗时太高了，影响了其他消息的发送
 	// 可以在发送之前，进行串行化，这样有了发送间隔之后，串行化次数就会少很多，这里懒得优化了
 	// 如果测试可以通过，就不着急
@@ -977,10 +1018,15 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 					if val.Index == entries.PrevLogIndex {
 						entries.PrevLogTerm = val.Term
 					}
-					MaxEntriesOneAppend := 100
+					MaxEntriesOneAppend := 1000
 					if val.Index >= rf.nextIndex[topeer] && len(entries.Entries) < MaxEntriesOneAppend {
 						entries.Entries = append(entries.Entries, val)
 					}
+				}
+				if entries.Entries[len(entries.Entries)-1].Index > rf.persistindex {
+					// 每次发送之前persist 这样能确保协商的数据肯定被persist，同时也不会太频繁
+					rf.persistindex = entries.Entries[len(entries.Entries)-1].Index
+					rf.persist()
 				}
 				rf.mu.Unlock()
 
@@ -993,14 +1039,13 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				if false == bok {
 					break // 失败之后，延迟再发，不着急
 				} else {
+					rf.mu.Lock()
 					if reply.Success {
-						rf.mu.Lock()
 						// If successful: update nextIndex and matchIndex for follower
 						rf.nextIndex[topeer] = entries.Entries[len(entries.Entries)-1].Index + 1
 						rf.matchIndex[topeer] = entries.Entries[len(entries.Entries)-1].Index
 						rf.updateLeaderCommitIndex()
 						rf.updateAppliedIndex()
-						rf.mu.Unlock()
 					} else {
 						if reply.Term == rf.MyTerm {
 							//rf.nextIndex[topeer]--
@@ -1008,12 +1053,14 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 							if rf.nextIndex[topeer] <= 0 {
 								rf.nextIndex[topeer] = 1 // 限制一下，不能比0 更小
 							}
+							rf.mu.Unlock()
 							rf.MyPrintf(DEBUGLOGREPLICATION, "send to peer %d entries not-success  againindex %d ", topeer, rf.nextIndex[topeer])
 							continue
 						} else if reply.Term > rf.MyTerm {
 							rf.getBiggerTerm(reply.Term)
 						}
 					}
+					rf.mu.Unlock()
 				}
 				// 发送处理结束
 			} else if rf.indexInSnapshot(rf.nextIndex[topeer]) {
