@@ -632,7 +632,7 @@ func (rf *Raft) dealElectionTimeout() {
 			if oknums >= len(rf.peers)/2+1 {
 				rf.mu.Lock()
 				rf.role = RoleLeader
-				rf.MyPrintf(DEBUGLOGREPLICATION, " become leader %d term %d\n", rf.me, rf.MyTerm)
+				rf.MyPrintf(0, " become leader %d term %d\n", rf.me, rf.MyTerm)
 				rf.initNowIAmLeader()
 				rf.mu.Unlock()
 				return
@@ -920,10 +920,10 @@ func (rf *Raft) dealHeartBeatTimeout() {
 				reply := AppendEntriesReply{}
 				ret := rf.sendAppendEntries(inx, &args, &reply, 100)
 				rf.mu.Lock()
-				defer rf.mu.Unlock()
 				if ret && reply.Term > rf.MyTerm {
 					rf.getBiggerTerm(reply.Term)
 				}
+				rf.mu.Unlock()
 			}(inx)
 		}
 	}
@@ -1159,7 +1159,7 @@ func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	rf.mu.Unlock()
 
-	rf.MyPrintf(DEBUGLOGREPLICATION, "************************* i kill myself now over!!!!")
+	rf.MyPrintf(0, "************************* i kill myself now over!!!!")
 }
 
 func (rf *Raft) killed() bool {
@@ -1210,7 +1210,7 @@ func (rf *Raft) extendLeaderHeartbeatTimeout() {
 }
 
 // var globaldebug = DEBUGELECTION
-var globaldebug = DEBUGLOGREPLICATION | DEBUGDETAIL
+var globaldebug = 0 //DEBUGLOGREPLICATION | DEBUGDETAIL
 
 func (rf *Raft) MyPrintf(level int, format string, a ...interface{}) {
 	if globaldebug&level == level {
