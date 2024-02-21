@@ -4,7 +4,9 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +52,7 @@ type OpReturn struct {
 type IndexInfo struct {
 	retchn chan OpReturn
 	term   int
+	op     Op
 }
 
 type KVServer struct {
@@ -79,6 +82,10 @@ kvserver 2 2024-02-20 19:27:49.079 --  ----------------- i am dead!!!
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// 直接执行查询？ 还是发起get ？ 如果发起get肯定没啥大问题
+	if kv.killed() {
+		reply.Err = "i am dead "
+		return
+	}
 	retchn := make(chan OpReturn, 1)
 	{
 		op := Op{
@@ -95,6 +102,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		kv.mapindex[_index] = IndexInfo{
 			retchn: retchn,
 			term:   _term,
+			op:     op,
 		}
 		kv.mu.Unlock()
 	}
@@ -108,6 +116,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	if kv.killed() {
+		reply.Err = "i am dead "
+		return
+	}
+
 	retchn := make(chan OpReturn, 1)
 	{
 		optype := OpPut
@@ -131,6 +144,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mapindex[_index] = IndexInfo{
 			retchn: retchn,
 			term:   _term,
+			op:     op,
 		}
 		kv.mu.Unlock()
 	}
@@ -154,6 +168,17 @@ func (kv *KVServer) Kill() {
 	kv.DPrintf(" ----------------- start i am dead ")
 	kv.rf.Kill()
 	atomic.StoreInt32(&kv.dead, 1)
+
+	kv.mu.Lock()
+	for _, v := range kv.mapindex {
+		ret := OpReturn{
+			Err: Err("i am dead"),
+		}
+		v.retchn <- ret
+	}
+	kv.mapindex = make(map[int]IndexInfo, 64)
+	kv.mu.Unlock()
+
 	// 如果 raft 正在调用 appendentries，需要往里面写数据， 但是这边先把applychn 退出了， 那边退不出来，这边的kill锁也拿不到
 	kv.DPrintf(" ----------------- i am dead!!!")
 	// Your code here, if desired.
@@ -211,9 +236,11 @@ func (kv *KVServer) applychan() {
 							panic(" this may can not happen")
 						}
 						inxinfo.retchn <- ret
+						delete(kv.mapindex, apply.CommandIndex) // 发送结束后，就清除map
 					}
+					kv.snapshot(apply)
 				} else if apply.SnapshotValid {
-
+					kv.decodesnapshot(apply)
 				}
 				kv.mu.Unlock()
 			}
@@ -226,6 +253,65 @@ func (kv *KVServer) applychan() {
 			}
 		}
 	}
+}
+
+func (kv *KVServer) snapshot(msg raft.ApplyMsg) {
+	if kv.maxraftstate != -1 && kv.rf.GetRaftStateSizee() > (kv.maxraftstate-100) {
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		err := e.Encode(kv.cleckserialnum)
+		err = e.Encode(kv.kv)
+		if err != nil {
+			panic(" encode kvserver snapshot error")
+		}
+		kv.rf.Snapshot(msg.CommandIndex, w.Bytes())
+	}
+}
+
+func (kv *KVServer) decodesnapshot(msg raft.ApplyMsg) {
+	r := bytes.NewBuffer(msg.Snapshot)
+	d := labgob.NewDecoder(r)
+	kv.cleckserialnum = make(map[int]int, 16)
+	kv.kv = make(map[string]string, 64)
+
+	if d.Decode(&kv.cleckserialnum) != nil ||
+		d.Decode(&kv.kv) != nil {
+		panic("snapshot decode error")
+	}
+	// 将Map转换为切片类型
+	keys := make([]int, len(kv.mapindex))
+	i := 0
+	for k := range kv.mapindex {
+		keys[i] = k
+		i++
+	}
+	// 按字母顺序对切片进行排序
+	sort.Ints(keys)
+	for i := range keys {
+		if i <= msg.SnapshotIndex {
+			if val, has := kv.mapindex[i]; has {
+				retval := ""
+				if val.op.Optype == OpGet {
+					retval = kv.kv[val.op.Key]
+				}
+				ret := OpReturn{
+					Value: retval,
+				}
+				val.retchn <- ret
+			}
+		} else {
+			break
+		}
+	}
+	// 发送结束后，就清除map
+	for i := range keys {
+		if i <= msg.SnapshotIndex {
+			delete(kv.mapindex, i)
+		} else {
+			break
+		}
+	}
+
 }
 
 // servers[] contains the ports of the set of
@@ -248,18 +334,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-	kv.DPrintf("make kvserver ")
-
-	// You may need initialization code here.
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
 	kv.kv = make(map[string]string, 64)
 	kv.mapindex = make(map[int]IndexInfo, 64)
-	kv.cleckserialnum = make(map[int]int, 4)
+	kv.cleckserialnum = make(map[int]int, 16)
 
-	go kv.applychan()
+	// You may need initialization code here.
+	kv.applyCh = make(chan raft.ApplyMsg, 1)
+	kv.DPrintf("make kvserver ")
+
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	go kv.applychan() // 确保kv.rf 赋值了，然后才执行 raft的恢复操作
 
 	return kv
 }

@@ -585,7 +585,8 @@ func (rf *Raft) dealElectionTimeout() {
 		ok    bool
 		reply RequestVoteReply
 	}
-	retchn := make(chan RetValue)
+	// retchn := make(chan RetValue) 会造成 超时的 rpc routine 退不出去，或者在增加一个stop chan
+	retchn := make(chan RetValue, len(rf.peers))
 
 	for inx, _ := range rf.peers {
 		if inx == rf.me {
@@ -687,6 +688,9 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	// Your code here (2A, 2B)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	if rf.killed() {
+		return
+	}
 
 	reply.Success = false
 	reply.Term = rf.MyTerm
@@ -1218,6 +1222,9 @@ func (rf *Raft) MyPrintf(level int, format string, a ...interface{}) {
 		format := "2006-01-02 15:04:05.000"
 		fmt.Printf("%d term %d %s -- %s\n", rf.me, rf.MyTerm, time.Now().Format(format), str)
 	}
+}
+func (rf *Raft) GetRaftStateSizee() int {
+	return rf.persister.RaftStateSize()
 }
 
 // 多次成功
