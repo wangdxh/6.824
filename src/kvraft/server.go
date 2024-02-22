@@ -65,7 +65,8 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	mapindex       map[int]IndexInfo
+	mapindex map[int]IndexInfo
+
 	kv             map[string]string
 	cleckserialnum map[int]int
 }
@@ -86,33 +87,17 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = "i am dead "
 		return
 	}
-	retchn := make(chan OpReturn, 1)
-	{
-		op := Op{
-			Optype: OpGet,
-			Key:    args.Key,
-		}
-		_index, _term, ok := kv.rf.Start(op)
-		if ok == false {
-			reply.Err = " i am not leader "
-			return
-		}
-		// 这里用一个什么来等待？ index 和 chan 来等待吧
-		kv.mu.Lock()
-		kv.mapindex[_index] = IndexInfo{
-			retchn: retchn,
-			term:   _term,
-			op:     op,
-		}
-		kv.mu.Unlock()
+
+	op := Op{
+		Optype:    OpGet,
+		Key:       args.Key,
+		ClerkId:   args.ClerkId,
+		SerialNum: args.SerialNum,
 	}
-	select {
-	case ok := <-retchn:
-		{
-			reply.Err = ok.Err
-			reply.Value = ok.Value
-		}
-	}
+
+	ret := kv.StartOp(op)
+	reply.Err = ret.Err
+	reply.Value = ret.Value
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -120,25 +105,46 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = "i am dead "
 		return
 	}
+	optype := OpPut
+	if strings.Compare(args.Op, "Append") == 0 {
+		optype = OpAppend
+	}
+	op := Op{
+		Optype:    optype,
+		Key:       args.Key,
+		Value:     args.Value,
+		ClerkId:   args.ClerkId,
+		SerialNum: args.SerialNum,
+	}
+	ret := kv.StartOp(op)
+	reply.Err = ret.Err
+}
 
+func (kv *KVServer) StartOp(op Op) OpReturn {
 	retchn := make(chan OpReturn, 1)
-	{
-		optype := OpPut
-		if strings.Compare(args.Op, "Append") == 0 {
-			optype = OpAppend
+	find := false
+	index := -1
+
+	kv.mu.Lock()
+	for key, val := range kv.mapindex {
+		if val.op == op {
+			// 新的来到了，老的肯定超时了  如果已经commit了，但是没有发现，这里再次提交
+			index = key
+			find = true
+			val.retchn = retchn
+			kv.mapindex[key] = val
+			break
 		}
-		op := Op{
-			Optype:    optype,
-			Key:       args.Key,
-			Value:     args.Value,
-			ClerkId:   args.ClerkId,
-			SerialNum: args.SerialNum,
-		}
+	}
+	kv.mu.Unlock()
+
+	if find {
+
+	} else {
 		_index, _term, ok := kv.rf.Start(op)
 		kv.DPrintf(" call start return %v %v %v", _index, _term, ok)
 		if ok == false {
-			reply.Err = " i am not leader "
-			return
+			return OpReturn{Err: " i am not leader "}
 		}
 		kv.mu.Lock()
 		kv.mapindex[_index] = IndexInfo{
@@ -147,13 +153,26 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			op:     op,
 		}
 		kv.mu.Unlock()
+		index = _index
 	}
+
 	select {
 	case ok := <-retchn:
 		{
-			reply.Err = ok.Err
+			return ok
+		}
+	case <-time.After((Clerk_Server_Timeout + 10) * time.Millisecond):
+		{
+			// 虽然有了超时，但是带来的问题是 当网络有问题的时候，发起的操作越来越多，raft这一级就直接返回了，这样会
+			// 非常危险啊。。。。。。 超时处理没有问题，因为客户端已经等待超时，发起了下一次操作， 虽然raft 的网络不稳定
+			// 但是 leader 依然会快速处理，所以 raft的leader 要有一个自动卸任的机制，否则这个start发起的频率太快了
+			kv.mu.Lock()
+			delete(kv.mapindex, index)
+			kv.mu.Unlock()
+			return OpReturn{Err: " time out putappend"}
 		}
 	}
+
 }
 
 // the tester calls Kill() when a KVServer instance won't

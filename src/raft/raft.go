@@ -382,7 +382,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		// 这个锁还是得加，因为它会访问 rf.logs，但是直接加，会在tester的线程卡死，所以这里单开协程
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		if index < rf.Snapshotinfo.LastIncludedIndex {
+		if index <= rf.Snapshotinfo.LastIncludedIndex { // kvserver中 snapshot由用户触发，如果两个index 是相同的 可能会造成查找失败
 			// 后面的 snapshot协程，可能会比早发起的协程要先执行。。。。。。防不胜防啊
 			return
 		}
@@ -905,6 +905,25 @@ func (rf *Raft) dealHeartBeatTimeout() {
 			if inx == rf.me {
 				continue
 			}
+			/*
+					kvserver中，当网络不稳定，但是clerk 不断超时，快速发起请求的时候，会造成 raft中的log 残留很多
+				    会有相同clerkid 和 serialnum， 如果此时 leader 不卸任，就会出错，
+					或者在 kvserver这一级进行判断，但是这一级判断不了，除非保存一个 clerkid serialnum  --> index 的映射，这样可以吧之前的index 绑定到新的retchannel上
+
+
+					学生提问：有没有可能出现极端的情况，导致单向的网络出现故障，进而使得Raft系统不能工作？
+
+
+					Robert教授：我认为是有可能的。例如，如果当前Leader的网络单边出现故障，Leader可以发出心跳，但是又不能收到任何客户端请求。
+					它发出的心跳被送达了，因为它的出方向网络是正常的，那么它的心跳会抑制其他服务器开始一次新的选举。
+					但是它的入方向网络是故障的，这会阻止它接收或者执行任何客户端请求。这个场景是Raft并没有考虑的众多极端的网络故障场景之一。
+
+					我认为这个问题是可修复的。我们可以通过一个双向的心跳来解决这里的问题。
+					在这个双向的心跳中，Leader发出心跳，但是这时Followers需要以某种形式响应这个心跳。
+					如果Leader一段时间没有收到自己发出心跳的响应，Leader会决定卸任，这样我认为可以解决这个特定的问题和一些其他的问题。
+					网络中可能发生非常奇怪的事情，而Raft协议没有考虑到这些场景。
+					查看响应是否过半数超时， 多次超时
+			*/
 			//lastloginx, lastlogterm := rf.lastEntryLogandSnapshot()
 			go func(inx int) {
 				rf.mu.Lock()

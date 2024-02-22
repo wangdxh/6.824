@@ -63,14 +63,21 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
+	ck.mu.Lock()
+	ck.serialnum += 1
+	nextserialnum := ck.serialnum
+	ck.mu.Unlock()
+
 	// 不需要加锁
 	for i := ck.lastleader; i < len(ck.servers); {
 		args := GetArgs{
-			Key: key,
+			Key:       key,
+			ClerkId:   ck.clerkid,
+			SerialNum: nextserialnum,
 		}
 		reply := GetReply{}
 		//ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
-		ok := ck.sendRPC(i, "KVServer.Get", &args, &reply, 30)
+		ok := ck.sendRPC(i, "KVServer.Get", &args, &reply, Clerk_Server_Timeout) // 难怪大量的残留 chan receive 都是get请求
 		if ok {
 			if len(reply.Err) == 0 {
 				ck.lastleader = i
@@ -111,7 +118,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		ck.DPrintf(" send to %d ", i)
 		//ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
-		ok := ck.sendRPC(i, "KVServer.PutAppend", &args, &reply, 300)
+		ok := ck.sendRPC(i, "KVServer.PutAppend", &args, &reply, Clerk_Server_Timeout)
 		ck.DPrintf(" server %d  return  %v  ", i, reply)
 		if ok {
 			if len(reply.Err) == 0 {

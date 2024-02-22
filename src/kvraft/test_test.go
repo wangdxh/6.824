@@ -591,12 +591,10 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	GenericTest(t, "3A", 15, 7, true, true, true, -1, true)
 }
 
-//
 // if one server falls behind, then rejoins, does it
 // recover by using the InstallSnapshot RPC?
 // also checks that majority discards committed log entries
 // even if minority doesn't respond.
-//
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000
@@ -719,4 +717,27 @@ func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 func TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, random keys, many clients (3B) ...
 	GenericTest(t, "3B", 15, 7, true, true, true, 1000, true)
+}
+
+func TestX(t *testing.T) {
+	type Y struct {
+		c string
+	}
+	type X struct {
+		a int
+		b string
+		y Y
+	}
+	maptest := make(map[X]int)
+	maptest[X{a: 100, b: "xxx", y: Y{c: "hhhhh"}}] = 102
+	fmt.Printf(" x is %d \r\n", maptest[X{a: 100, b: "xxx", y: Y{c: "hhhhh"}}])
+	fmt.Printf(" x == x is %v", X{a: 100, b: "xxx", y: Y{c: "hhhhh"}} == X{a: 100, b: "xxx", y: Y{c: "hhhhh"}})
+
+	mapval := make(map[string]string)
+	mapval["1"] = "ssss"
+	mapval["2"] = "ssss"
+	for key, val := range mapval {
+		mapval[key] = "bbb" + val
+	}
+	fmt.Printf("\r\n%v", mapval)
 }

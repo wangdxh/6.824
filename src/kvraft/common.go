@@ -26,9 +26,9 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	//ClerkId   int
-	//SerialNum int
+	Key       string
+	ClerkId   int
+	SerialNum int
 	// You'll have to add definitions here.
 }
 
@@ -37,3 +37,5 @@ type GetReply struct {
 	Value string
 	//LeaderId int
 }
+
+const Clerk_Server_Timeout = 300
