@@ -73,9 +73,7 @@ const (
 	DEBUGSNAPSHOT       = 1 << 3 // 2
 	DEBUGDETAIL         = 1 << 4
 )
-const (
-	RAFTMAXLOGSIZE = 1600
-)
+const ()
 
 type SnapshotInfo struct {
 	LastIncludedIndex int
@@ -192,21 +190,27 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.MyTerm, rf.role == RoleLeader
 }
 func (rf *Raft) Print() {
+	rf.printX(DEBUGDETAIL)
+}
+func (rf *Raft) Print0() {
+	rf.printX(0)
+}
+func (rf *Raft) printX(level int) {
 
 	if len(rf.Logs) > 0 {
 		if len(rf.Logs) < 30 {
-			rf.MyPrintf(DEBUGDETAIL, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v all %v ",
+			rf.MyPrintf(level, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v all %v ",
 				rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
 				rf.Logs[0], rf.Logs[len(rf.Logs)-1], rf.Logs)
 		} else {
 			slice := rf.Logs[len(rf.Logs)-30:]
-			rf.MyPrintf(DEBUGDETAIL, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v last30 %v",
+			rf.MyPrintf(level, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v last30 %v",
 				rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
 				rf.Logs[0], rf.Logs[len(rf.Logs)-1], slice)
 		}
 
 	} else {
-		rf.MyPrintf(DEBUGDETAIL, "        fullinfo %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  ",
+		rf.MyPrintf(level, "        fullinfo %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  ",
 			rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs))
 	}
 }
@@ -436,7 +440,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	// Take care that these snapshots only advance the service's state, and don't cause it to move backwards.
 	// 只能增加，不能减，不论什么异常情况
-	rf.MyPrintf(DEBUGLOGREPLICATION, "InstallSnapshot leaderterm %d leaderid %d  includedindex %d includeterm %d",
+	rf.MyPrintf(0, "InstallSnapshot leaderterm %d leaderid %d  includedindex %d includeterm %d",
 		args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
 	if args.LastIncludedIndex <= rf.Snapshotinfo.LastIncludedIndex {
 		return
@@ -640,6 +644,7 @@ func (rf *Raft) dealElectionTimeout() {
 				rf.mu.Lock()
 				rf.role = RoleLeader
 				rf.MyPrintf(0, " become leader %d term %d\n", rf.me, rf.MyTerm)
+				rf.Print0()
 				rf.initNowIAmLeader()
 				rf.mu.Unlock()
 				return
@@ -798,7 +803,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 			}
 			rf.persist()
 		}
-		rf.MyPrintf(DEBUGLOGREPLICATION, "        replica logs: len: %v   first %v end %v ", len(rf.Logs), rf.Logs[0], rf.Logs[len(rf.Logs)-1])
+		rf.MyPrintf(0, "        replica logs: len: %v   first %v end %v ", len(rf.Logs), rf.Logs[0], rf.Logs[len(rf.Logs)-1])
 		reply.Success = true
 		rf.Print()
 	}
@@ -1016,6 +1021,7 @@ func (rf *Raft) indexInSnapshot(index int) bool {
 
 func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 	rf.MyPrintf(DEBUGLOGREPLICATION, " start go routine sendlog %d ", topeer)
+	errnums := 0
 	for rf.killed() == false {
 		time.Sleep(time.Millisecond * time.Duration(10))
 
@@ -1066,8 +1072,16 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				reply := AppendEntriesReply{}
 				bok := rf.sendAppendEntries(topeer, &entries, &reply, 1000)
 				if false == bok {
+					errnums++
+					if errnums >= 5 && (errnums%5) == 0 {
+						rf.MyPrintf(0, "entries  big send error nums : %d to peer %d -----------------", errnums, topeer)
+					}
 					break // 失败之后，延迟再发，不着急
 				} else {
+					if errnums > 0 {
+						errnums = 0
+						rf.MyPrintf(0, "entries big send error nums sucess: %d to peer %d -----------------", errnums, topeer)
+					}
 					rf.mu.Lock()
 					if reply.Success {
 						// If successful: update nextIndex and matchIndex for follower
@@ -1109,6 +1123,11 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				reply := InstallSnapshotReply{}
 				ok := rf.sendInstallSnapshot(topeer, &args, &reply, 1000)
 				if ok {
+					if errnums > 0 {
+						errnums = 0
+						rf.MyPrintf(0, "installsnapshot big send error nums sucess: %d to peer %d -----------------", errnums, topeer)
+					}
+
 					rf.mu.Lock()
 					if reply.Term == rf.MyTerm {
 						// If successful: update nextIndex and matchIndex for follower
@@ -1121,6 +1140,10 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 					}
 					rf.mu.Unlock()
 				} else {
+					errnums++
+					if errnums >= 5 && (errnums%5 == 0) {
+						rf.MyPrintf(0, " installsnapshot big send error nums : %d to peer %d -----------------", errnums, topeer)
+					}
 					break
 				}
 			} else {
