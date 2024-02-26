@@ -71,9 +71,11 @@ func (ck *Clerk) Get(key string) string {
 	// 不需要加锁
 	for i := ck.lastleader; i < len(ck.servers); {
 		args := GetArgs{
-			Key:       key,
-			ClerkId:   ck.clerkid,
-			SerialNum: nextserialnum,
+			Key: key,
+			ClerkInfo: ClerkSerial{
+				ClerkId:   ck.clerkid,
+				SerialNum: nextserialnum,
+			},
 		}
 		reply := GetReply{}
 		//ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
@@ -108,11 +110,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	for i := ck.lastleader; i < len(ck.servers); {
 		args := PutAppendArgs{
-			Key:       key,
-			Value:     value,
-			Op:        op,
-			ClerkId:   ck.clerkid,
-			SerialNum: nextserialnum,
+			Key:   key,
+			Value: value,
+			Op:    op,
+			ClerkInfo: ClerkSerial{
+				ClerkId:   ck.clerkid,
+				SerialNum: nextserialnum,
+			},
 		}
 		reply := PutAppendReply{}
 

@@ -8,6 +8,11 @@ const (
 
 type Err string
 
+type ClerkSerial struct {
+	ClerkId   int
+	SerialNum int
+}
+
 // Put or Append
 type PutAppendArgs struct {
 	Key   string
@@ -16,8 +21,7 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	ClerkId   int
-	SerialNum int
+	ClerkInfo ClerkSerial
 }
 
 type PutAppendReply struct {
@@ -27,8 +31,7 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key       string
-	ClerkId   int
-	SerialNum int
+	ClerkInfo ClerkSerial
 	// You'll have to add definitions here.
 }
 

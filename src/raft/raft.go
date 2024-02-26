@@ -108,8 +108,9 @@ type Raft struct {
 	leaderTimeout   time.Time
 
 	persistindex int
+	persistmu    sync.Mutex
 
-	persistmu sync.Mutex
+	Maxraftstate int
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -153,7 +154,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VotedFor = -1
 	rf.role = RoleFollower
 	rf.applyChn = applyCh
-
+	rf.Maxraftstate = -1
 	retchn := make(chan int)
 	go func() {
 		rf.mu.Lock()
@@ -175,6 +176,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func (rf *Raft) getBiggerTerm(replyterm int) {
 	if replyterm > rf.MyTerm {
+		if rf.role == RoleLeader {
+			rf.MyPrintf(0, " leader get bigger term i become fellower")
+		}
 		rf.MyTerm = replyterm
 		rf.VotedFor = -1
 		rf.role = RoleFollower
@@ -382,12 +386,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		// 这个锁还是得加，因为它会访问 rf.logs，但是直接加，会在tester的线程卡死，所以这里单开协程
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		if index <= rf.Snapshotinfo.LastIncludedIndex { // kvserver中 snapshot由用户触发，如果两个index 是相同的 可能会造成查找失败
+		if index <= rf.Snapshotinfo.LastIncludedIndex ||
+			(rf.Maxraftstate != -1 && rf.GetRaftStateSizee() <= rf.Maxraftstate) {
+			// kvserver中 snapshot由用户触发，如果两个index 是相同的 可能会造成查找失败
 			// 后面的 snapshot协程，可能会比早发起的协程要先执行。。。。。。防不胜防啊
 			return
 		}
 		// snapshot 已经是所有的数据合集了，config.go 256行
-		rf.MyPrintf(DEBUGLOGREPLICATION, " call Snapshot index %d", index)
+		rf.MyPrintf(0, " call Snapshot index %d", index)
 
 		bfind, loginx, logterm := rf.trimLogs(index)
 		// snapshot 在有新的commit index的时候，才会执行， 所以肯定会有数据
@@ -1125,7 +1131,7 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 		}
 	}
 out:
-	rf.MyPrintf(DEBUGLOGREPLICATION, " end go routine sendlog %d ", topeer)
+	rf.MyPrintf(DEBUGLOGREPLICATION, " dealLogReplication go routine over %d ", topeer)
 }
 
 func (rf *Raft) findTermByLogIndex(index int) (bool, int) {
@@ -1233,7 +1239,7 @@ func (rf *Raft) extendLeaderHeartbeatTimeout() {
 }
 
 // var globaldebug = DEBUGELECTION
-var globaldebug = 0 //DEBUGLOGREPLICATION | DEBUGDETAIL
+var globaldebug = 0 // DEBUGLOGREPLICATION //| DEBUGDETAIL
 
 func (rf *Raft) MyPrintf(level int, format string, a ...interface{}) {
 	if globaldebug&level == level {
