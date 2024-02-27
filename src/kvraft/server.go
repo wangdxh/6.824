@@ -76,7 +76,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	mapindex map[ClerkSerial]IndexInfo
+	mapclerkreqs map[ClerkSerial]IndexInfo
 
 	kv             map[string]string
 	cleckserialnum map[int]int
@@ -133,11 +133,11 @@ func (kv *KVServer) StartOp(op Op) OpReturn {
 	retchn := make(chan OpReturn, 1)
 
 	kv.mu.Lock()
-	for key, val := range kv.mapindex {
+	for key, val := range kv.mapclerkreqs {
 		term, _ := kv.rf.GetState()
 		if (val.op.ClerkInfo.ClerkId == op.ClerkInfo.ClerkId && val.op.ClerkInfo.SerialNum < op.ClerkInfo.SerialNum) ||
 			val.term < term {
-			delete(kv.mapindex, key)
+			delete(kv.mapclerkreqs, key)
 		}
 		// 某些情况下，首先leader 发起了start； 但是leader 挂了， 重新选举又中举了，但是后续没有其他的操作了，所以会导致
 		// 上次start的操作，并不会进行commit，因为一个leader启动之后，只有在它的term内，发起了新的操作，才会commit 之前term内提交给它的数据
@@ -145,7 +145,7 @@ func (kv *KVServer) StartOp(op Op) OpReturn {
 	}
 	valhas := false
 	index := -1
-	if val, has := kv.mapindex[op.ClerkInfo]; has {
+	if val, has := kv.mapclerkreqs[op.ClerkInfo]; has {
 		valhas = has
 		index = val.index
 		if val.opretvalid {
@@ -155,7 +155,7 @@ func (kv *KVServer) StartOp(op Op) OpReturn {
 		}
 		kv.DPrintf0(" startop call reset channel %d-%d", op.ClerkInfo.ClerkId, op.ClerkInfo.SerialNum)
 		val.retchn = retchn
-		kv.mapindex[op.ClerkInfo] = val
+		kv.mapclerkreqs[op.ClerkInfo] = val
 	}
 	kv.mu.Unlock()
 
@@ -170,12 +170,12 @@ func (kv *KVServer) StartOp(op Op) OpReturn {
 		//这里的start 和 map 是分开的锁，会出现start 刚结束，这里未继续，那边已经applychn 成功了
 		kv.mu.Lock()
 		index = _index
-		if val, has := kv.mapindex[op.ClerkInfo]; has && val.opretvalid {
+		if val, has := kv.mapclerkreqs[op.ClerkInfo]; has && val.opretvalid {
 			kv.DPrintf0(" startop return %d-%d ok: true index: %d", op.ClerkInfo.ClerkId, op.ClerkInfo.SerialNum, index)
 			kv.mu.Unlock()
 			return val.opret
 		} else {
-			kv.mapindex[op.ClerkInfo] = IndexInfo{
+			kv.mapclerkreqs[op.ClerkInfo] = IndexInfo{
 				retchn: retchn,
 				index:  _index,
 				term:   _term,
@@ -212,7 +212,7 @@ func (kv *KVServer) StartOp(op Op) OpReturn {
 func (kv *KVServer) Kill() {
 	kv.rf.Kill()
 	atomic.StoreInt32(&kv.dead, 1)
-	kv.DPrintf0("-----------------  kvserver i am dead mapindex size is %d ", len(kv.mapindex))
+	kv.DPrintf0("-----------------  kvserver i am dead mapclerkreqs size is %d ", len(kv.mapclerkreqs))
 }
 
 func (kv *KVServer) killed() bool {
@@ -257,17 +257,17 @@ func (kv *KVServer) applychan() {
 					ret := OpReturn{
 						Value: val,
 					}
-					if inxinfo, ok := kv.mapindex[p.ClerkInfo]; ok {
+					if inxinfo, ok := kv.mapclerkreqs[p.ClerkInfo]; ok {
 						if inxinfo.opretvalid == false && isleader {
 							/*if inxinfo.term != termnow {
 								ret.Err = Err(fmt.Sprintf(" may i am not leader term diff %d from %d ", termnow, inxinfo.term))
 								inxinfo.retchn <- ret
-								delete(kv.mapindex, p.ClerkInfo) // ?
+								delete(kv.mapclerkreqs, p.ClerkInfo) // ?
 							} else
 							if isleader {*/
 							inxinfo.opretvalid = true
 							inxinfo.opret = ret
-							kv.mapindex[p.ClerkInfo] = inxinfo
+							kv.mapclerkreqs[p.ClerkInfo] = inxinfo
 							/*} else {
 								panic(" this may can not happen")
 							}*/
@@ -283,7 +283,7 @@ func (kv *KVServer) applychan() {
 							op:         p,
 							retchn:     make(chan OpReturn, 1),
 						}
-						kv.mapindex[p.ClerkInfo] = inxin
+						kv.mapclerkreqs[p.ClerkInfo] = inxin
 					}
 					kv.snapshot(apply)
 				} else if apply.SnapshotValid {
@@ -331,9 +331,9 @@ func (kv *KVServer) decodesnapshot(msg raft.ApplyMsg) {
 	}
 	/*
 		// 为什么这里不做处理呢？ 因为只有leader可以处理消息，leader运行后，不会收到 install snapshot
-			keys := make([]int, len(kv.mapindex))
+			keys := make([]int, len(kv.mapclerkreqs))
 			i := 0
-			for k := range kv.mapindex {
+			for k := range kv.mapclerkreqs {
 				keys[i] = k
 				i++
 			}
@@ -341,7 +341,7 @@ func (kv *KVServer) decodesnapshot(msg raft.ApplyMsg) {
 			sort.Ints(keys)
 			for i := range keys {
 				if i <= msg.SnapshotIndex {
-					if val, has := kv.mapindex[i]; has {
+					if val, has := kv.mapclerkreqs[i]; has {
 						if val.opretvalid {
 							continue
 						} // 别重复操作
@@ -355,7 +355,7 @@ func (kv *KVServer) decodesnapshot(msg raft.ApplyMsg) {
 						}
 						val.opretvalid = true
 						val.opret = ret
-						kv.mapindex[i] = val
+						kv.mapclerkreqs[i] = val
 						val.retchn <- ret
 					}
 				} else {
@@ -385,7 +385,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.me = me
 	kv.maxraftstate = maxraftstate
 	kv.kv = make(map[string]string, 64)
-	kv.mapindex = make(map[ClerkSerial]IndexInfo, 64)
+	kv.mapclerkreqs = make(map[ClerkSerial]IndexInfo, 64)
 	kv.cleckserialnum = make(map[int]int, 16)
 
 	// You may need initialization code here.
@@ -425,7 +425,7 @@ leader 的卸任，可以主动触发， 不然kvserver这里发起时，需要�
 
 /*
 可以优化的部分3 ok
-mapindex 使用clerkid _ serialnum 作为key 一开始没有引进这两个参数，导致有点跑偏了
+mapclerkreqs 使用clerkid _ serialnum 作为key 一开始没有引进这两个参数，导致有点跑偏了
 index 和raft 关系太紧密，这样应该使用 clerk 的唯一信息来判断
 */
 
