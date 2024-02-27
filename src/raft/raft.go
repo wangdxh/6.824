@@ -1074,13 +1074,15 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				if false == bok {
 					errnums++
 					if errnums >= 5 && (errnums%5) == 0 {
-						rf.MyPrintf(0, "entries  big send error nums : %d to peer %d -----------------", errnums, topeer)
+						rf.MyPrintf(0, "entries from %d len %d big send error nums : %d to peer %d -----------------",
+							entries.PrevLogIndex, len(entries.Entries), errnums, topeer)
 					}
 					break // 失败之后，延迟再发，不着急
 				} else {
 					if errnums > 0 {
+						rf.MyPrintf(0, "entries from %d len %d  big send error nums sucess: %d to peer %d -----------------",
+							entries.PrevLogIndex, len(entries.Entries), errnums, topeer)
 						errnums = 0
-						rf.MyPrintf(0, "entries big send error nums sucess: %d to peer %d -----------------", errnums, topeer)
 					}
 					rf.mu.Lock()
 					if reply.Success {
@@ -1124,8 +1126,8 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				ok := rf.sendInstallSnapshot(topeer, &args, &reply, 1000)
 				if ok {
 					if errnums > 0 {
+						rf.MyPrintf(0, "installsnapshot %d big send error nums sucess: %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
 						errnums = 0
-						rf.MyPrintf(0, "installsnapshot big send error nums sucess: %d to peer %d -----------------", errnums, topeer)
 					}
 
 					rf.mu.Lock()
@@ -1142,7 +1144,7 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				} else {
 					errnums++
 					if errnums >= 5 && (errnums%5 == 0) {
-						rf.MyPrintf(0, " installsnapshot big send error nums : %d to peer %d -----------------", errnums, topeer)
+						rf.MyPrintf(0, " installsnapshot %d big send error nums : %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
 					}
 					break
 				}
