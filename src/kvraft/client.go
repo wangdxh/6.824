@@ -89,6 +89,9 @@ func (ck *Clerk) Get(key string) string {
 		}
 		i++
 		i = i % len(ck.servers)
+		if i == ck.lastleader {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 	panic(" here can not happen")
 	return ""
@@ -133,6 +136,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		i++
 		i = i % len(ck.servers)
+		if i == ck.lastleader {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 }
 

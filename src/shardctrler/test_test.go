@@ -401,3 +401,57 @@ func TestMulti(t *testing.T) {
 
 	fmt.Printf("  ... Passed\n")
 }
+
+func TestConfigMy(t *testing.T) {
+	cfg := Config{
+		Num:    0,
+		Shards: [10]int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		Groups: make(map[int][]string),
+	}
+	newgroup := make(map[int][]string)
+	newgroup[1] = []string{"a1", "b1", "c1"}
+	newcfg := AddConfig(&cfg, newgroup)
+
+	newgroup = make(map[int][]string)
+	newgroup[2] = []string{"a2", "b2", "c2"}
+	newgroup[3] = []string{"a3", "b3", "c3"}
+	newcfg2 := AddConfig(&newcfg, newgroup)
+
+	newgroup = make(map[int][]string)
+	newgroup[4] = []string{"a4", "b4", "c4"}
+	newcfg3 := AddConfig(&newcfg2, newgroup)
+
+	leavegroups := []int{4}
+	LeaveConfig(&newcfg3, leavegroups)
+
+	leavegroups = []int{2, 4}
+	LeaveConfig(&newcfg3, leavegroups)
+
+	leavegroups = []int{1, 2, 3, 4}
+	LeaveConfig(&newcfg3, leavegroups)
+
+	newgroup = make(map[int][]string)
+	newgroup[1] = []string{"a1", "b1", "c1"}
+	newgroup[2] = []string{"a2", "b2", "c2"}
+	newgroup[3] = []string{"a3", "b3", "c3"}
+	cfg3 := AddConfig(&cfg, newgroup)
+
+	newgroup = make(map[int][]string)
+	newgroup[4] = []string{"a1", "b1", "c1"}
+	newgroup[5] = []string{"a2", "b2", "c2"}
+	newgroup[6] = []string{"a3", "b3", "c3"}
+	newgroup[7] = []string{"a3", "b3", "c3"}
+	newgroup[8] = []string{"a3", "b3", "c3"}
+	newgroup[9] = []string{"a3", "b3", "c3"}
+	newgroup[10] = []string{"a3", "b3", "c3"}
+	newgroup[11] = []string{"a3", "b3", "c3"}
+	newgroup[12] = []string{"a3", "b3", "c3"}
+	newgroup[13] = []string{"a3", "b3", "c3"}
+	cfg4 := AddConfig(&cfg3, newgroup)
+
+	leavegroups = []int{10, 11}
+	LeaveConfig(&cfg4, leavegroups)
+
+	leavegroups = []int{3, 4, 5}
+	LeaveConfig(&cfg4, leavegroups)
+}
