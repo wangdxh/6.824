@@ -54,7 +54,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.clerkid = G_CLERK_ID
 	ck.serialnum = 0
 
-	fmt.Printf(" makeclerk %d  servers %d \r\n", ck.clerkid, len(servers))
+	fmt.Printf("shardctrler makeclerk %d  servers %d \r\n", ck.clerkid, len(servers))
 	G_mu.Unlock()
 	return ck
 }

@@ -10,13 +10,21 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
+	//OK             = "OK"
+	OK             = ""
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 )
 
 type Err string
+
+type ClerkSerial struct {
+	ClerkId   int
+	SerialNum int
+	ShardId   int
+	ConfigNum int
+}
 
 // Put or Append
 type PutAppendArgs struct {
@@ -27,6 +35,7 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClerkInfo ClerkSerial
 }
 
 type PutAppendReply struct {
@@ -36,6 +45,7 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	ClerkInfo ClerkSerial
 }
 
 type GetReply struct {

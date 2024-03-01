@@ -739,5 +739,5 @@ func TestX(t *testing.T) {
 	for key, val := range mapval {
 		mapval[key] = "bbb" + val
 	}
-	fmt.Printf("\r\n%v", mapval)
+	fmt.Printf("\r\n%v\n\n", mapval)
 }

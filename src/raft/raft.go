@@ -63,17 +63,17 @@ type Entry struct {
 }
 
 const (
-	RoleFollower  int = iota // 0
-	RoleLeader               // 1
-	RoleCandidate            // 2
+	RoleFollower  int32 = iota // 0
+	RoleLeader                 // 1
+	RoleCandidate              // 2
 )
 const (
-	DEBUGELECTION       = 1 << 1 // 0
-	DEBUGLOGREPLICATION = 1 << 2 // 1
-	DEBUGSNAPSHOT       = 1 << 3 // 2
-	DEBUGDETAIL         = 1 << 4
+	DEBUGBASIC = iota + 1
+	DEBUGELECTION
+	DEBUGLOGREPLICATION
+	DEBUGSNAPSHOT
+	DEBUGDETAIL
 )
-const ()
 
 type SnapshotInfo struct {
 	LastIncludedIndex int
@@ -93,7 +93,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 	MyTerm           int // currentTerm in paper
 	VotedFor         int
-	role             int
+	role             int32
 	CommitIndex      int // index of highest log entry known to be committed
 	LastAppliedIndex int // index of highest log entry applied to state machine
 	Logs             []Entry
@@ -109,6 +109,8 @@ type Raft struct {
 	persistmu    sync.Mutex
 
 	Maxraftstate int
+	PrintfPrefix string
+	DebugLevel   int
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -128,6 +130,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.DebugLevel = DEBUGBASIC
 	rf.MyTerm = 0
 	rf.CommitIndex = 0
 	rf.LastAppliedIndex = 0
@@ -150,7 +153,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.VotedFor = -1
-	rf.role = RoleFollower
+	rf.setrole(RoleFollower)
 	rf.applyChn = applyCh
 	rf.Maxraftstate = -1
 	retchn := make(chan int)
@@ -174,12 +177,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func (rf *Raft) getBiggerTerm(replyterm int) {
 	if replyterm > rf.MyTerm {
-		if rf.role == RoleLeader {
-			rf.MyPrintf(0, " leader get bigger term i become fellower")
+		if rf.getrole() == RoleLeader {
+			rf.MyPrintf(DEBUGBASIC, " leader get bigger term i become fellower")
 		}
 		rf.MyTerm = replyterm
 		rf.VotedFor = -1
-		rf.role = RoleFollower
+		rf.setrole(RoleFollower)
 	}
 }
 
@@ -187,8 +190,16 @@ func (rf *Raft) getBiggerTerm(replyterm int) {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	return rf.MyTerm, rf.role == RoleLeader
+	return rf.MyTerm, rf.getrole() == RoleLeader
 }
+
+func (rf *Raft) getrole() int32 {
+	return atomic.LoadInt32(&rf.role)
+}
+func (rf *Raft) setrole(newrole int32) {
+	atomic.StoreInt32(&rf.role, newrole)
+}
+
 func (rf *Raft) Print() {
 	rf.printX(DEBUGDETAIL)
 }
@@ -200,18 +211,18 @@ func (rf *Raft) printX(level int) {
 	if len(rf.Logs) > 0 {
 		if len(rf.Logs) < 30 {
 			rf.MyPrintf(level, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v all %v ",
-				rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
+				rf.me, rf.MyTerm, rf.getrole() == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
 				rf.Logs[0], rf.Logs[len(rf.Logs)-1], rf.Logs)
 		} else {
 			slice := rf.Logs[len(rf.Logs)-30:]
 			rf.MyPrintf(level, "        fullinfo: %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  first: %v end: %v last30 %v",
-				rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
+				rf.me, rf.MyTerm, rf.getrole() == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs),
 				rf.Logs[0], rf.Logs[len(rf.Logs)-1], slice)
 		}
 
 	} else {
 		rf.MyPrintf(level, "        fullinfo %d term %d isleader %v commitedindex: %d  applyiedindex: %d snapshot %v logslen: %d  ",
-			rf.me, rf.MyTerm, rf.role == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs))
+			rf.me, rf.MyTerm, rf.getrole() == RoleLeader, rf.CommitIndex, rf.LastAppliedIndex, rf.Snapshotinfo, len(rf.Logs))
 	}
 }
 
@@ -397,7 +408,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 			return
 		}
 		// snapshot 已经是所有的数据合集了，config.go 256行
-		rf.MyPrintf(0, " call Snapshot index %d", index)
+		rf.MyPrintf(DEBUGBASIC, " call Snapshot index %d", index)
 
 		bfind, loginx, logterm := rf.trimLogs(index)
 		// snapshot 在有新的commit index的时候，才会执行， 所以肯定会有数据
@@ -440,7 +451,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	// Take care that these snapshots only advance the service's state, and don't cause it to move backwards.
 	// 只能增加，不能减，不论什么异常情况
-	rf.MyPrintf(0, "InstallSnapshot leaderterm %d leaderid %d  includedindex %d includeterm %d",
+	rf.MyPrintf(DEBUGBASIC, "InstallSnapshot leaderterm %d leaderid %d  includedindex %d includeterm %d",
 		args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
 	if args.LastIncludedIndex <= rf.Snapshotinfo.LastIncludedIndex {
 		return
@@ -582,7 +593,7 @@ func (rf *Raft) dealElectionTimeout() {
 		return
 	} else {
 		rf.MyTerm += 1
-		rf.role = RoleCandidate
+		rf.setrole(RoleCandidate)
 		rf.VotedFor = rf.me
 	}
 	rf.persist()
@@ -634,7 +645,7 @@ func (rf *Raft) dealElectionTimeout() {
 		// 这里可能会有一些异常发生，在异步发送了投票请求之后，马上收到了 更高term的请求，使得自己的term更加了 同时变成 rolefellower 了
 		// 所以这里判断一下，如果有变化，直接退出选举 防不胜防啊
 		// 3 term 77 2024-02-05 20:18:18.249 -- send request to 0 vote spend 261 ms ret true reply granted true replyterm 76
-		if rf.role != RoleCandidate && ret.reply.Term != rf.MyTerm {
+		if rf.getrole() != RoleCandidate && ret.reply.Term != rf.MyTerm {
 			rf.MyPrintf(DEBUGLOGREPLICATION, "get bad term or role, i will exit election")
 			return
 		}
@@ -642,8 +653,8 @@ func (rf *Raft) dealElectionTimeout() {
 			oknums++
 			if oknums >= len(rf.peers)/2+1 {
 				rf.mu.Lock()
-				rf.role = RoleLeader
-				rf.MyPrintf(0, " become leader %d term %d\n", rf.me, rf.MyTerm)
+				rf.setrole(RoleLeader)
+				rf.MyPrintf(DEBUGBASIC, " become leader %d term %d\n", rf.me, rf.MyTerm)
 				rf.Print0()
 				rf.initNowIAmLeader()
 				rf.mu.Unlock()
@@ -709,7 +720,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		return
 	}
 
-	if rf.role == RoleLeader && rf.MyTerm == args.Term {
+	if rf.getrole() == RoleLeader && rf.MyTerm == args.Term {
 		rf.Print()
 		rf.MyPrintf(DEBUGLOGREPLICATION, "peer info %v", args)
 		panic(" big problome, election error , now have  two leader !!!!!!!!!!!!!!!!!")
@@ -803,7 +814,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 			}
 			rf.persist()
 		}
-		rf.MyPrintf(0, "        replica logs: len: %v   first %v end %v ", len(rf.Logs), rf.Logs[0], rf.Logs[len(rf.Logs)-1])
+		rf.MyPrintf(DEBUGBASIC, "        replica logs: len: %v   first %v end %v ", len(rf.Logs), rf.Logs[0], rf.Logs[len(rf.Logs)-1])
 		reply.Success = true
 		rf.Print()
 	}
@@ -911,7 +922,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntries, reply *Append
 }
 
 func (rf *Raft) dealHeartBeatTimeout() {
-	if rf.role == RoleLeader {
+	if rf.getrole() == RoleLeader {
 		for inx, _ := range rf.peers {
 			if inx == rf.me {
 				continue
@@ -945,7 +956,7 @@ func (rf *Raft) dealHeartBeatTimeout() {
 					//PrevLogIndex: lastloginx,
 					//PrevLogTerm:  lastlogterm,
 				}
-				if rf.role != RoleLeader {
+				if rf.getrole() != RoleLeader {
 					rf.mu.Unlock()
 					return
 				}
@@ -979,7 +990,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if RoleLeader != rf.role {
+	if RoleLeader != rf.getrole() {
 		return -1, -1, false
 	}
 	index, term := rf.lastEntryLogandSnapshot()
@@ -1002,7 +1013,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// 这里肯定不能串行化啊，耗时太高了，影响了其他消息的发送
 	// 可以在发送之前，进行串行化，这样有了发送间隔之后，串行化次数就会少很多，这里懒得优化了
 	// 如果测试可以通过，就不着急
-	return index, term, rf.role == RoleLeader
+	return index, term, rf.getrole() == RoleLeader
 }
 
 func (rf *Raft) indexInLog(index int) bool {
@@ -1027,7 +1038,7 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 
 		//If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
 		for {
-			if RoleLeader != rf.role || nowmyterm != rf.MyTerm {
+			if RoleLeader != rf.getrole() || nowmyterm != rf.MyTerm {
 				goto out // 新的协程会继续起来
 			}
 			entries := AppendEntries{
@@ -1074,13 +1085,13 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				if false == bok {
 					errnums++
 					if errnums >= 5 && (errnums%5) == 0 {
-						rf.MyPrintf(0, "entries from %d len %d big send error nums : %d to peer %d -----------------",
+						rf.MyPrintf(DEBUGBASIC, "entries from %d len %d big send error nums : %d to peer %d -----------------",
 							entries.PrevLogIndex, len(entries.Entries), errnums, topeer)
 					}
 					break // 失败之后，延迟再发，不着急
 				} else {
 					if errnums > 0 {
-						rf.MyPrintf(0, "entries from %d len %d  big send error nums sucess: %d to peer %d -----------------",
+						rf.MyPrintf(DEBUGBASIC, "entries from %d len %d  big send error nums sucess: %d to peer %d -----------------",
 							entries.PrevLogIndex, len(entries.Entries), errnums, topeer)
 						errnums = 0
 					}
@@ -1126,7 +1137,7 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				ok := rf.sendInstallSnapshot(topeer, &args, &reply, 1000)
 				if ok {
 					if errnums > 0 {
-						rf.MyPrintf(0, "installsnapshot %d big send error nums sucess: %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
+						rf.MyPrintf(DEBUGBASIC, "installsnapshot %d big send error nums sucess: %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
 						errnums = 0
 					}
 
@@ -1144,7 +1155,7 @@ func (rf *Raft) dealLogReplication(topeer int, nowmyterm int) {
 				} else {
 					errnums++
 					if errnums >= 5 && (errnums%5 == 0) {
-						rf.MyPrintf(0, " installsnapshot %d big send error nums : %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
+						rf.MyPrintf(DEBUGBASIC, " installsnapshot %d big send error nums : %d to peer %d -----------------", args.LastIncludedIndex, errnums, topeer)
 					}
 					break
 				}
@@ -1213,7 +1224,7 @@ func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	rf.mu.Unlock()
 
-	rf.MyPrintf(0, "************************* i kill myself now over!!!!")
+	rf.MyPrintf(DEBUGBASIC, "************************* i kill myself now over!!!!")
 }
 
 func (rf *Raft) killed() bool {
@@ -1229,7 +1240,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		time.Sleep(time.Millisecond * time.Duration(10))
 
-		if rf.role == RoleLeader {
+		if rf.getrole() == RoleLeader {
 			if rf.leaderTimeout.Before(time.Now()) {
 				rf.dealHeartBeatTimeout()
 				rf.MyPrintf(DEBUGELECTION, "leader %d term %d send heartbeat time %v\n", rf.me, rf.MyTerm, time.Now().UnixMilli())
@@ -1263,14 +1274,11 @@ func (rf *Raft) extendLeaderHeartbeatTimeout() {
 	rf.leaderTimeout = time.Now().Add(time.Millisecond * time.Duration(x))
 }
 
-// var globaldebug = DEBUGELECTION
-var globaldebug = 0 // DEBUGLOGREPLICATION //| DEBUGDETAIL
-
 func (rf *Raft) MyPrintf(level int, format string, a ...interface{}) {
-	if globaldebug&level == level {
+	if rf.DebugLevel >= level {
 		str := fmt.Sprintf(format, a...)
 		format := "2006-01-02 15:04:05.000"
-		fmt.Printf("%d term %d %s -- %s\n", rf.me, rf.MyTerm, time.Now().Format(format), str)
+		fmt.Printf("%s %d term %d %s -- %s\n", rf.PrintfPrefix, rf.me, rf.MyTerm, time.Now().Format(format), str)
 	}
 }
 func (rf *Raft) GetRaftStateSizee() int {

@@ -329,39 +329,6 @@ func (kv *KVServer) decodesnapshot(msg raft.ApplyMsg) {
 		d.Decode(&kv.kv) != nil {
 		panic("snapshot decode error")
 	}
-	/*
-		// 为什么这里不做处理呢？ 因为只有leader可以处理消息，leader运行后，不会收到 install snapshot
-			keys := make([]int, len(kv.mapclerkreqs))
-			i := 0
-			for k := range kv.mapclerkreqs {
-				keys[i] = k
-				i++
-			}
-			// 按字母顺序对切片进行排序
-			sort.Ints(keys)
-			for i := range keys {
-				if i <= msg.SnapshotIndex {
-					if val, has := kv.mapclerkreqs[i]; has {
-						if val.opretvalid {
-							continue
-						} // 别重复操作
-						retval := ""
-						if val.op.Optype == OpGet {
-							retval = kv.kv[val.op.Key]
-						}
-
-						ret := OpReturn{
-							Value: retval,
-						}
-						val.opretvalid = true
-						val.opret = ret
-						kv.mapclerkreqs[i] = val
-						val.retchn <- ret
-					}
-				} else {
-					break
-				}
-			}*/
 }
 
 // servers[] contains the ports of the set of

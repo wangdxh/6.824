@@ -50,6 +50,7 @@ type ShardCtrler struct {
 	mapclerkreqs   map[ClerkSerial]IndexInfo
 	configs        []Config // indexed by config num
 	cleckserialnum map[int]int
+	DebugLevel     int
 }
 
 func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
@@ -146,14 +147,18 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 
 	sc.mapclerkreqs = make(map[ClerkSerial]IndexInfo, 64)
 	sc.cleckserialnum = make(map[int]int, 16)
+	sc.DebugLevel = 0 // 1  0 关闭 strctl 的debug print
 
 	labgob.Register(Op{})
 	sc.applyCh = make(chan raft.ApplyMsg)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
+	sc.rf.DebugLevel = sc.DebugLevel
+
+	sc.rf.PrintfPrefix = "shardctrler "
 
 	go sc.applychan() // 确保kv.rf 赋值了，然后才执行 raft的恢复操作
 	// Your code here.
-	sc.DPrintf0("make kvserver ")
+	sc.DPrintf0("make shardctrler server ")
 	return sc
 }
 
@@ -243,7 +248,7 @@ func (sc *ShardCtrler) applychan() {
 					//If the number is -1 or bigger than the biggest known configuration number, the shardctrler should reply with the latest configuration.
 					val := sc.configs[len(sc.configs)-1]
 					p := (apply.Command).(Op)
-					sc.DPrintf0("apply channel index %d  %d-%d", apply.CommandIndex, p.ClerkInfo.ClerkId, p.ClerkInfo.SerialNum)
+					sc.DPrintf0("apply channel index %d  %d-%d  op: %s", apply.CommandIndex, p.ClerkInfo.ClerkId, p.ClerkInfo.SerialNum, maprpccall[p.Optype])
 
 					if p.Optype == QUERY {
 						for _, cfg := range sc.configs {
@@ -297,7 +302,7 @@ func (sc *ShardCtrler) applychan() {
 		case <-time.After(100 * time.Millisecond):
 			{
 				if sc.killed() {
-					sc.DPrintf("go routinue  sc.applychan() exit ")
+					sc.DPrintf0("go routinue  sc.applychan() exit ")
 					return
 				}
 			}
@@ -306,18 +311,10 @@ func (sc *ShardCtrler) applychan() {
 }
 func (sc *ShardCtrler) DPrintf0(format string, a ...interface{}) {
 	//log.Printf(format, a...)
-	str := fmt.Sprintf(format, a...)
-	formattime := "2006-01-02 15:04:05.000"
-	fmt.Printf("sc server %d %s -- %s\n", sc.me, time.Now().Format(formattime), str)
-	return
-}
-
-func (sc *ShardCtrler) DPrintf(format string, a ...interface{}) {
-	if Debug {
-		//log.Printf(format, a...)
+	if sc.DebugLevel > 0 {
 		str := fmt.Sprintf(format, a...)
-		format := "2006-01-02 15:04:05.000"
-		fmt.Printf("sc server %d %s -- %s\n", sc.me, time.Now().Format(format), str)
+		formattime := "2006-01-02 15:04:05.000"
+		fmt.Printf("shardctrler server %d %s -- %s\n", sc.me, time.Now().Format(formattime), str)
+		return
 	}
-	return
 }
