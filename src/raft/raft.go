@@ -1278,11 +1278,17 @@ func (rf *Raft) MyPrintf(level int, format string, a ...interface{}) {
 	if rf.DebugLevel >= level {
 		str := fmt.Sprintf(format, a...)
 		format := "2006-01-02 15:04:05.000"
-		fmt.Printf("%s %d term %d %s -- %s\n", rf.PrintfPrefix, rf.me, rf.MyTerm, time.Now().Format(format), str)
+		fmt.Printf("%s%d term %d %s -- %s\n", rf.PrintfPrefix, rf.me, rf.MyTerm, time.Now().Format(format), str)
 	}
 }
 func (rf *Raft) GetRaftStateSizee() int {
 	return rf.persister.RaftStateSize()
+}
+
+func (rf *Raft) InitedOver() {
+	rf.mu.Lock()
+	rf.mu.Unlock()
+	rf.MyPrintf(DEBUGBASIC, " i am inited over !!!")
 }
 
 // 多次成功

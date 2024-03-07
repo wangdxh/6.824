@@ -95,7 +95,7 @@ func (ck *Clerk) getNextSerialnum() int {
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
-	args.ClerkInfo = ClerkSerial{
+	args.ClerkInfo = MetaInfo{
 		ClerkId:   ck.clerkid,
 		SerialNum: ck.getNextSerialnum(),
 		ShardId:   key2shard(key),
@@ -115,7 +115,6 @@ func (ck *Clerk) Get(key string) string {
 
 					if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 						ck.gidlastleader[gid] = si
-						fmt.Printf(" get 2 %s  err %s \r\n", key, reply.Err)
 						return reply.Value
 					}
 					if ok && (reply.Err == ErrWrongGroup) {
@@ -128,12 +127,12 @@ func (ck *Clerk) Get(key string) string {
 					if si == lastleader { // 一轮了， 都没有返回成功
 						time.Sleep(100 * time.Millisecond)
 					}
-					fmt.Printf(" get 0 %s  err %s \r\n", key, reply.Err)
+					//fmt.Printf(" get 0 %s  err %s \r\n", key, reply.Err)
 				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
-		fmt.Printf(" get 1 %s config num %d \r\n", key, ck.config.Num)
+		//fmt.Printf(" get 1 %s config num %d \r\n", key, ck.config.Num)
 		// ask controler for the latest configuration.
 		ck.config = ck.ctrlerclerk.Query(-1)
 	}
@@ -146,7 +145,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key = key
 	args.Value = value
 	args.Op = op
-	args.ClerkInfo = ClerkSerial{
+	args.ClerkInfo = MetaInfo{
 		ClerkId:   ck.clerkid,
 		SerialNum: ck.getNextSerialnum(),
 		ShardId:   key2shard(key),

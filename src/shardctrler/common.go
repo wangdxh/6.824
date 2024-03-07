@@ -33,6 +33,13 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func (cg *Config) GetGidfromShard(shardid int) int {
+	if shardid < 0 || shardid >= NShards {
+		panic(fmt.Sprintf(" error shardid  %d ", shardid))
+	}
+	return cg.Shards[shardid]
+}
+
 func (cg *Config) Clone() Config {
 	newcfg := Config{
 		Num:    cg.Num + 1,

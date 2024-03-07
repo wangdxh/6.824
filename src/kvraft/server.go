@@ -262,7 +262,7 @@ func (kv *KVServer) applychan() {
 							/*if inxinfo.term != termnow {
 								ret.Err = Err(fmt.Sprintf(" may i am not leader term diff %d from %d ", termnow, inxinfo.term))
 								inxinfo.retchn <- ret
-								delete(kv.mapclerkreqs, p.ClerkInfo) // ?
+								delete(kv.mapclerkreqs, p.Meta) // ?
 							} else
 							if isleader {*/
 							inxinfo.opretvalid = true

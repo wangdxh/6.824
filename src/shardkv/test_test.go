@@ -1,6 +1,8 @@
 package shardkv
 
-import "6.824/porcupine"
+import (
+	"6.824/porcupine"
+)
 import "6.824/models"
 import "testing"
 import "strconv"
@@ -114,7 +116,9 @@ func TestJoinLeave(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	fmt.Printf(" will   join 1 ---------------------------------\n")
 	cfg.join(1)
+	fmt.Printf("    join 1 ---------------------------------\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -123,7 +127,9 @@ func TestJoinLeave(t *testing.T) {
 		va[i] += x
 	}
 
+	fmt.Printf(" will   leave 1 ---------------------------------\n")
 	cfg.leave(0)
+	fmt.Printf("   leave 1 ---------------------------------\n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -939,4 +945,25 @@ func TestChallenge2Partial(t *testing.T) {
 func TestMy(t *testing.T) {
 	var a string = ""
 	fmt.Printf(" %v ", a == "")
+
+	var map1 = map[int]int{
+		1: 2,
+		2: 3,
+	}
+	type aaaa struct {
+		x map[int]int
+	}
+	aaaa1 := aaaa{
+		x: map1,
+	}
+	aaaa2 := aaaa1
+	aaaa2.x[3] = 4
+	map2 := map1
+	map2[2] = 4
+	fmt.Printf(" %v  %v  %v \r\n", map2, map1, aaaa2)
+	n := 10
+	for i := 0; i < n; i++ {
+		key := strconv.Itoa(i) // ensure multiple shards
+		fmt.Printf(" %d  shard id is  %d \r\n", i, key2shard(key))
+	}
 }
