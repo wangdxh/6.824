@@ -82,6 +82,8 @@ func (state ShardState) String() string {
 		return "ShardPrePareing"
 	case ShardCurrent:
 		return "ShardCurrent"
+	case ShardPrePass:
+		return "ShardPrePass"
 	case ShardPass:
 		return "ShardPass"
 	case ShardWaited:
@@ -94,6 +96,7 @@ func (state ShardState) String() string {
 const (
 	ShardPrePareing ShardState = iota
 	ShardCurrent
+	ShardPrePass
 	ShardPass
 	ShardWaited
 )
@@ -308,7 +311,7 @@ func (kv *ShardKV) applychan() {
 							p.Meta.ConfigNum >= shardinfo.CurConfigNum, shardinfo.CurShardState.String(), p.ShardState.String())
 
 						if p.Meta.ConfigNum >= shardinfo.CurConfigNum {
-							if p.ShardState == ShardPass && kv.configs[p.Meta.ConfigNum].GetGidfromShard(p.Meta.ShardId) == kv.gid && isleader {
+							/*if p.ShardState == ShardPass && kv.configs[p.Meta.ConfigNum].GetGidfromShard(p.Meta.ShardId) == kv.gid {
 								kv.DPrintf0(" apply chan reconfig shardid %d confignum %d  will passed and will sendrpc to next config num ",
 									p.Meta.ShardId, p.Meta.ConfigNum)
 								kv.advanceShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, ShardWaited)
@@ -316,18 +319,17 @@ func (kv *ShardKV) applychan() {
 									// 当前是我，下一个不是我，才会进行迁移
 									kv.SendShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, p.Meta.ConfigNum+1)
 								}(termnow)
-							} else {
-								kv.advanceShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, p.ShardState)
-							}
+							} else {*/
+							kv.advanceShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, p.ShardState)
+							//}
 						} else {
-							kv.DPrintf0("old request shardid %d metaconfig %d  curconfig %d", p.Meta.ShardId, p.Meta.ConfigNum,
+							kv.DPrintf0("drop old request shardid %d metaconfig %d  curconfig %d", p.Meta.ShardId, p.Meta.ConfigNum,
 								shardinfo.CurConfigNum)
 						}
-
 					} else {
-						if shardinfo.CurShardState != ShardCurrent || shardinfo.CurConfigNum > p.Meta.ConfigNum {
+						if shardinfo.CurShardState > ShardCurrent || shardinfo.CurConfigNum > p.Meta.ConfigNum {
 							// 不再处理 肯定要迁移
-							kv.DPrintf0("old request shardid %d metaconfig %d  curconfig %d   state not current %s ", p.Meta.ShardId, p.Meta.ConfigNum,
+							kv.DPrintf0("drop old request shardid %d metaconfig %d  curconfig %d   state not current %s ", p.Meta.ShardId, p.Meta.ConfigNum,
 								shardinfo.CurConfigNum, shardinfo.CurShardState.String())
 							// delete the request
 							delete(kv.mapclerkreqs, p.Meta.ClerkReq())
@@ -343,9 +345,6 @@ func (kv *ShardKV) applychan() {
 									ret.Err = ErrNoKey
 								}
 							} else {
-								if cleckserialnum == nil {
-									fmt.Printf("x")
-								}
 								serialnum, has := cleckserialnum[p.Meta.ClerkId]
 								if !has || p.Meta.SerialNum > serialnum {
 									cleckserialnum[p.Meta.ClerkId] = p.Meta.SerialNum

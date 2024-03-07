@@ -8,8 +8,11 @@ import (
 
 func (kv *ShardKV) SendShardInfo(shardid int, configfrom int, configto int) {
 
+	if kv.inited == false {
+		return
+	}
 	_, _isleader := kv.rf.GetState()
-	if kv.inited && _isleader {
+	if _isleader {
 		kv.mu.Lock()
 		cfgfrom := kv.configs[configfrom]
 		gidfrom := cfgfrom.Shards[shardid]
@@ -68,22 +71,14 @@ func (kv *ShardKV) SendShardInfo(shardid int, configfrom int, configto int) {
 					time.Sleep(300 * time.Millisecond)
 				}
 			}
-			kv.DPrintf0(" shardid %d start go delete", shardid)
+
 			kv.mu.Lock()
-			kv.DPrintf0(" shardid %d enter go delete", shardid)
-			kv.advanceShardInfo(shardid, configfrom, ShardPass)
-			// delete shard info
-			for k, _ := range kv.kv {
-				if key2shard(k) == shardid {
-					delete(kv.kv, k)
-				}
-			}
-			// 我屮艸芔茻 这里delete 它干啥，状态全没了
-			// delete(kv.mapshard, shardid)
-			kv.DPrintf0(" delete shardid %d kvinfo when confignum %d ", shardid, configfrom)
+			kv.reconfiginlock(shardid, configfrom, ShardPass)
+			//kv.advanceShardInfo(shardid, configfrom, ShardPass)
 			kv.mu.Unlock()
 		}
 	}
+
 }
 
 func (kv *ShardKV) GetProposeShard(shardid int, configfrom int, configto int) *ProposeShardArgs {
@@ -272,7 +267,7 @@ func (kv *ShardKV) advancedconfig() {
 								//kv.advanceShardInfo(shardid, newcfg.Num, ShardCurrent) // 老的gid current， 新的gid 直接进入current
 							} else if val.CurState() == ShardPrePareing {
 								// 我还在等待呢，等我 current了， 我再迁移
-							} else if val.CurState() == ShardPass {
+							} else if val.CurState() == ShardPass || val.CurState() == ShardPrePass {
 								panic(" today is me,  tomorrow is me why i passed ?")
 							}
 						} else {
@@ -290,11 +285,28 @@ func (kv *ShardKV) advancedconfig() {
 								// 发送kv 迁移给 新的gid send rpc ..........
 								// 这里好像不能发送，因为， 有些数据可能没有commit  糊涂啊
 								// 当前的状态设置为pass， 但是不能删除，只有 apply pass之后，才能 迁移，和删除
-								kv.reconfiginlock(shardid, cfg.Num, ShardPass)
-
+								//kv.reconfiginlock(shardid, cfg.Num, ShardPass)
+								kv.reconfiginlock(shardid, cfg.Num, ShardPrePass)
 							} else if val.CurState() == ShardPrePareing {
 								// 我还在等待呢，等我 current了， 我再迁移
+							} else if val.CurState() == ShardPrePass {
+								// leader 执行迁移，先进入waited， 迁移完成，进入pass状态； 非leader 等待进入pass，然后删除状态
+								// 如果leader迁移的时候挂了，新的leader 在prepass状态，会继续迁移;
+								if isleader {
+									// 改变本地状态为wait，不让循环多次进入
+									kv.advanceShardInfo(shardid, cfg.Num, ShardWaited)
+									go func() {
+										kv.SendShardInfo(shardid, cfg.Num, newcfg.Num)
+									}()
+								}
 							} else if val.CurState() == ShardPass {
+								//删除数据，再切换
+								kv.DPrintf0(" delete shardid %d kvinfo when confignum %d ", shardid, cfg.Num)
+								for k, _ := range kv.kv {
+									if key2shard(k) == shardid {
+										delete(kv.kv, k)
+									}
+								}
 								// advance pass
 								kv.reconfiginlock(shardid, newcfg.Num, ShardPass)
 							}
