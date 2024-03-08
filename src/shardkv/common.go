@@ -79,10 +79,11 @@ type ProposeShardArgs struct {
 }
 
 type ProposeShardReply struct {
-	Err Err
+	Err      Err
+	IsLeader bool
 }
 
-type CommitShardArgs struct {
+/*type CommitShardArgs struct {
 	ShardId       int
 	Gidfrom       int
 	Confignumfrom int
@@ -91,4 +92,4 @@ type CommitShardArgs struct {
 }
 type CommitShardReply struct {
 	Err Err
-}
+}*/

@@ -35,6 +35,8 @@ type Op struct {
 	Key    string
 	Value  string
 	ShardState
+	SKv    map[string]string
+	SClerk map[int]int
 	shardctrler.Config
 	Meta MetaInfo
 }
@@ -86,8 +88,6 @@ func (state ShardState) String() string {
 		return "ShardPrePass"
 	case ShardPass:
 		return "ShardPass"
-	case ShardWaited:
-		return "ShardWaited"
 	}
 	panic(" sble ")
 	return " sble "
@@ -98,7 +98,6 @@ const (
 	ShardCurrent
 	ShardPrePass
 	ShardPass
-	ShardWaited
 )
 
 type ShardIdInfo struct {
@@ -106,6 +105,8 @@ type ShardIdInfo struct {
 	CurShardState ShardState
 	//Gid              int
 	ClerkToSerialNum map[int]int
+	/*waitStateProcessing bool
+	waitTerm            int*/
 	//ConfigState      map[int]ShardState // SardState
 }
 
@@ -299,40 +300,74 @@ func (kv *ShardKV) applychan() {
 						apply.CommandIndex, p.Meta.ClerkId, p.Meta.SerialNum)
 
 					var cleckserialnum map[int]int
-					shardinfo, _ := kv.mapshard[p.Meta.ShardId]
+					shardinfo, _ := kv.getShardInfo(p.Meta.ShardId)
 					// 1 - 1  8 2 config 2
 					cleckserialnum = shardinfo.ClerkToSerialNum
 					if p.Optype == OpReConfig {
-						if len(kv.configs) == p.Config.Num {
+						if p.Config.Num == kv.configs[len(kv.configs)-1].Num+1 {
 							kv.configs = append(kv.configs, p.Config)
 						}
 						kv.DPrintf0("shardid %d confignum %d apply chan reconfig nowconfig is %d will update %v  state from %s to %s   ",
 							p.Meta.ShardId, p.Meta.ConfigNum, shardinfo.CurConfigNum,
 							p.Meta.ConfigNum >= shardinfo.CurConfigNum, shardinfo.CurShardState.String(), p.ShardState.String())
 
-						if p.Meta.ConfigNum >= shardinfo.CurConfigNum {
-							/*if p.ShardState == ShardPass && kv.configs[p.Meta.ConfigNum].GetGidfromShard(p.Meta.ShardId) == kv.gid {
-								kv.DPrintf0(" apply chan reconfig shardid %d confignum %d  will passed and will sendrpc to next config num ",
-									p.Meta.ShardId, p.Meta.ConfigNum)
-								kv.advanceShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, ShardWaited)
-								go func(term int) {
-									// 当前是我，下一个不是我，才会进行迁移
-									kv.SendShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, p.Meta.ConfigNum+1)
-								}(termnow)
-							} else {*/
+						if p.Meta.ConfigNum > shardinfo.CurConfigNum ||
+							p.Meta.ConfigNum == shardinfo.CurConfigNum && p.ShardState >= shardinfo.CurShardState {
+
+							if p.ShardState == ShardCurrent && shardinfo.CurShardState < ShardCurrent {
+								if p.SKv != nil {
+									for k, v := range p.SKv {
+										if _, has := kv.kv[k]; has {
+											panic(" 你的数据从哪里来的？ 多次提交了？")
+										}
+										kv.kv[k] = v
+									}
+								}
+								if p.SClerk != nil {
+									for k, v := range p.SClerk {
+										if val2, has := shardinfo.ClerkToSerialNum[k]; has && val2 > v {
+											panic(" 哪里来的数据，竟然比我大 ")
+										}
+										shardinfo.ClerkToSerialNum[k] = v
+									}
+								}
+							} else if p.ShardState == ShardPass {
+								//删除数据，再切换  敢这么激进吗？？
+								kv.DPrintf0(" delete shardid %d kvinfo when confignum %d ", p.Meta.ShardId, p.Meta.ConfigNum)
+								for k, _ := range kv.kv {
+									if key2shard(k) == p.Meta.ShardId {
+										delete(kv.kv, k)
+									}
+								}
+								shardinfo.ClerkToSerialNum = make(map[int]int)
+							}
 							kv.advanceShardInfo(p.Meta.ShardId, p.Meta.ConfigNum, p.ShardState)
 							//}
 						} else {
-							kv.DPrintf0("drop old request shardid %d metaconfig %d  curconfig %d", p.Meta.ShardId, p.Meta.ConfigNum,
+							kv.DPrintf0("drop old request reconfig shardid %d metaconfig %d  curconfig %d", p.Meta.ShardId, p.Meta.ConfigNum,
 								shardinfo.CurConfigNum)
 						}
+
+						// delete the 过时的 request
+						shardinfo = kv.getShardInfo2(p.Meta.ShardId)
+						for k, v := range kv.mapclerkreqs {
+							if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum != shardinfo.CurConfigNum {
+								// 都得死
+								delete(kv.mapclerkreqs, p.Meta.ClerkReq())
+							}
+							if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum == shardinfo.CurConfigNum && shardinfo.CurShardState > ShardCurrent {
+								// 都得死
+								delete(kv.mapclerkreqs, p.Meta.ClerkReq())
+							}
+						}
+
 					} else {
-						if shardinfo.CurShardState > ShardCurrent || shardinfo.CurConfigNum > p.Meta.ConfigNum {
-							// 不再处理 肯定要迁移
-							kv.DPrintf0("drop old request shardid %d metaconfig %d  curconfig %d   state not current %s ", p.Meta.ShardId, p.Meta.ConfigNum,
+						if shardinfo.CurConfigNum != p.Meta.ConfigNum || shardinfo.CurShardState > ShardCurrent {
+							kv.DPrintf0("drop old request op shardid %d metaconfig %d  curconfig %d   state not current %s ", p.Meta.ShardId, p.Meta.ConfigNum,
 								shardinfo.CurConfigNum, shardinfo.CurShardState.String())
-							// delete the request
-							delete(kv.mapclerkreqs, p.Meta.ClerkReq())
+							// 过期的kv 不再处理， 这里的 消息是否需要delete， 在上面应该就删除过了，这里不在删除了
+							// 这里只是不再处理已经有的消息了
+
 						} else {
 							ret := OpReturn{
 								Value: "",
@@ -442,10 +477,18 @@ func (kv *ShardKV) decodesnapshot(msg raft.ApplyMsg) {
 		panic("snapshot decode error")
 	}
 	for _, val := range cfgs {
-		if val.Num == len(kv.configs) {
+		if val.Num == kv.configs[len(kv.configs)-1].Num+1 {
 			kv.configs = append(kv.configs, val)
 		}
 	}
+	kv.DPrintf0(" kv.configs %v", kv.configs)
+
+	/*for k, v := range kv.mapshard {
+		if v.CurShardState == ShardWaited {
+			kv.DPrintf0(" apply channel snapshot shardid %d config %d is waited !!!", k, v.CurConfigNum)
+			panic(" sble ")
+		}
+	}*/
 }
 
 // servers[] contains the ports of the servers in this group.
