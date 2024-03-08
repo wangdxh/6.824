@@ -283,6 +283,21 @@ func (kv *ShardKV) killed() bool {
 	return z == 1
 }
 
+func (kv *ShardKV) deleteOldClientRequest(p *Op) {
+	// delete the 过时的 request
+	shardinfo := kv.getShardInfo2(p.Meta.ShardId)
+	for k, v := range kv.mapclerkreqs {
+		if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum != shardinfo.CurConfigNum {
+			// 都得死，
+			delete(kv.mapclerkreqs, k)
+		}
+		if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum == shardinfo.CurConfigNum && shardinfo.CurShardState > ShardCurrent {
+			// 都得死
+			delete(kv.mapclerkreqs, k)
+		}
+	}
+}
+
 func (kv *ShardKV) applychan() {
 	for {
 		select {
@@ -349,25 +364,14 @@ func (kv *ShardKV) applychan() {
 						}
 
 						// delete the 过时的 request
-						shardinfo = kv.getShardInfo2(p.Meta.ShardId)
-						for k, v := range kv.mapclerkreqs {
-							if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum != shardinfo.CurConfigNum {
-								// 都得死
-								delete(kv.mapclerkreqs, p.Meta.ClerkReq())
-							}
-							if k.ShardId == p.Meta.ShardId && v.op.Meta.ConfigNum == shardinfo.CurConfigNum && shardinfo.CurShardState > ShardCurrent {
-								// 都得死
-								delete(kv.mapclerkreqs, p.Meta.ClerkReq())
-							}
-						}
-
+						kv.deleteOldClientRequest(&p)
 					} else {
 						if shardinfo.CurConfigNum != p.Meta.ConfigNum || shardinfo.CurShardState > ShardCurrent {
 							kv.DPrintf0("drop old request op shardid %d metaconfig %d  curconfig %d   state not current %s ", p.Meta.ShardId, p.Meta.ConfigNum,
 								shardinfo.CurConfigNum, shardinfo.CurShardState.String())
 							// 过期的kv 不再处理， 这里的 消息是否需要delete， 在上面应该就删除过了，这里不在删除了
 							// 这里只是不再处理已经有的消息了
-
+							kv.deleteOldClientRequest(&p)
 						} else {
 							ret := OpReturn{
 								Value: "",

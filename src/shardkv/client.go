@@ -118,7 +118,7 @@ func (ck *Clerk) Get(key string) string {
 						return reply.Value
 					}
 					if ok && (reply.Err == ErrWrongGroup) {
-						fmt.Printf(" return ErrWrongGroup ??? ")
+						ck.DPrintf(" return ErrWrongGroup ")
 						break
 					}
 					// ... not ok, or ErrWrongLeader
