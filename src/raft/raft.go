@@ -645,14 +645,16 @@ func (rf *Raft) dealElectionTimeout() {
 		// 这里可能会有一些异常发生，在异步发送了投票请求之后，马上收到了 更高term的请求，使得自己的term更加了 同时变成 rolefellower 了
 		// 所以这里判断一下，如果有变化，直接退出选举 防不胜防啊
 		// 3 term 77 2024-02-05 20:18:18.249 -- send request to 0 vote spend 261 ms ret true reply granted true replyterm 76
-		if rf.getrole() != RoleCandidate && ret.reply.Term != rf.MyTerm {
+
+		rf.mu.Lock()
+		if rf.getrole() != RoleCandidate { //&& ret.reply.Term != rf.MyTerm {
 			rf.MyPrintf(DEBUGLOGREPLICATION, "get bad term or role, i will exit election")
+			rf.mu.Unlock()
 			return
 		}
-		if ret.reply.VoteGranted {
+		if ret.reply.VoteGranted && ret.reply.Term == rf.MyTerm {
 			oknums++
 			if oknums >= len(rf.peers)/2+1 {
-				rf.mu.Lock()
 				rf.setrole(RoleLeader)
 				rf.MyPrintf(DEBUGBASIC, " become leader %d term %d\n", rf.me, rf.MyTerm)
 				rf.Print0()
@@ -661,11 +663,11 @@ func (rf *Raft) dealElectionTimeout() {
 				return
 			}
 		} else if ret.reply.Term > rf.MyTerm {
-			rf.mu.Lock()
 			rf.getBiggerTerm(ret.reply.Term)
 			rf.mu.Unlock()
 			return
 		}
+		rf.mu.Unlock()
 	}
 }
 
@@ -721,8 +723,8 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	}
 
 	if rf.getrole() == RoleLeader && rf.MyTerm == args.Term {
-		rf.Print()
-		rf.MyPrintf(DEBUGLOGREPLICATION, "peer info %v", args)
+		rf.printX(DEBUGBASIC)
+		rf.MyPrintf(DEBUGBASIC, "peer info %v", args)
 		panic(" big problome, election error , now have  two leader !!!!!!!!!!!!!!!!!")
 	}
 

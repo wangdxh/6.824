@@ -30,7 +30,11 @@ func (kv *ShardKV) SendShardInfo(shardid int, configfrom int, configto int) {
 				if kv.killed() || false == _isleader {
 					return
 				}
-				args := kv.GetProposeShard(shardid, configfrom, configto)
+				args, configok := kv.GetProposeShard(shardid, configfrom, configto)
+				if configok == false {
+					// curconfig 变化了，这里直接返回,
+					return
+				}
 				var reply ProposeShardReply
 				ok := kv.sendRPC(shardid, configfrom, servers[si], "ShardKV.ProposeShard", args, &reply, Clerk_Server_Timeout)
 				if ok && reply.Err == OK {
@@ -52,12 +56,13 @@ func (kv *ShardKV) SendShardInfo(shardid int, configfrom int, configto int) {
 	}
 }
 
-func (kv *ShardKV) GetProposeShard(shardid int, configfrom int, configto int) *ProposeShardArgs {
+func (kv *ShardKV) GetProposeShard(shardid int, configfrom int, configto int) (*ProposeShardArgs, bool) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	val := kv.getShardInfo2(shardid)
 	if val.CurConfigNum != configfrom {
-		panic(fmt.Sprintf(" shardid %d  config %d differ %d ", shardid, configfrom, val.CurConfigNum))
+		kv.DPrintf0(" shardid %d  config %d differ %d ", shardid, configfrom, val.CurConfigNum)
+		return nil, false
 	}
 	var args = ProposeShardArgs{
 		ShardId:       shardid,
@@ -77,7 +82,7 @@ func (kv *ShardKV) GetProposeShard(shardid int, configfrom int, configto int) *P
 	for k, v := range val.ClerkToSerialNum {
 		args.ClerkSerial[k] = v
 	}
-	return &args
+	return &args, true
 }
 
 func (kv *ShardKV) ProposeShard(args *ProposeShardArgs, reply *ProposeShardReply) {
