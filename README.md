@@ -9,7 +9,7 @@ You are not allowed to look at anyone else's solution, and you are not allowed t
 ```
 git clone git://g.csail.mit.edu/6.824-golabs-2022 6.824
 ```
-
+24-03-09 over!
 
 ## lab2
 http://nil.csail.mit.edu/6.824/2022/labs/lab-raft.html
